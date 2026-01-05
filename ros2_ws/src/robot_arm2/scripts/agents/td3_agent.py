@@ -387,3 +387,31 @@ class TD3Agent:
         self.critic_target.load_state_dict(self.critic.state_dict())
         
         print(f"Models loaded: {filename}")
+    
+    def load_models(self, actor_path, critic_path=None):
+        """
+        Load actor and critic networks from paths.
+        Matches SAC API for consistent usage in train_robot.py
+        
+        Args:
+            actor_path: Path to actor checkpoint
+            critic_path: Path to critic checkpoint (optional, will infer if not provided)
+        """
+        self.actor.load_state_dict(torch.load(actor_path, map_location=self.device))
+        
+        # Infer critic path from actor path if not provided
+        if critic_path is None:
+            critic_path = actor_path.replace('actor_', 'critic_')
+        
+        if os.path.exists(critic_path):
+            self.critic.load_state_dict(torch.load(critic_path, map_location=self.device))
+        
+        # Copy to target networks
+        self.actor_target.load_state_dict(self.actor.state_dict())
+        self.critic_target.load_state_dict(self.critic.state_dict())
+        
+        # Set to eval mode
+        self.actor.eval()
+        self.critic.eval()
+        
+        print(f"✅ TD3 models loaded from: {actor_path}")

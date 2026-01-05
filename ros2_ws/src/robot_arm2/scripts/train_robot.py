@@ -167,6 +167,37 @@ def train(args):
             elif buffer_path:
                 print(f"   ❌ Buffer file not found: {buffer_path}")
         
+        # Ask to load existing model weights (CRITICAL for continuing training!)
+        load_model = input("\n🧠 Load existing model weights? (y/n): ").strip().lower()
+        if load_model == 'y':
+            import glob
+            # Find best model checkpoints based on agent type
+            checkpoint_dir = f"checkpoints/{args.agent}_gazebo" if args.agent == 'sac' else f"checkpoints/{args.agent}"
+            actor_files = glob.glob(f"{checkpoint_dir}/actor_*best*.pth")
+            
+            if actor_files:
+                actor_files.sort(key=os.path.getmtime, reverse=True)
+                default_model = actor_files[0]
+                print(f"   Found best model: {default_model}")
+                model_path = input(f"   Enter path (Enter = load best model): ").strip()
+                if model_path == '':
+                    model_path = default_model
+            else:
+                print(f"   No model files found in {checkpoint_dir}/")
+                print(f"   Example: {checkpoint_dir}/actor_sac_best.pth")
+                model_path = input("   Enter path (Enter = skip): ").strip()
+            
+            if model_path and os.path.exists(model_path):
+                try:
+                    agent.load_models(model_path)
+                    print(f"   ✅ Loaded model weights - agent will use trained policy!")
+                except Exception as e:
+                    print(f"   ❌ Failed to load model: {e}")
+            elif model_path:
+                print(f"   ❌ Model file not found: {model_path}")
+        else:
+            print("   ⚠️  Starting with RANDOM policy (model weights not loaded)")
+        
         # Training statistics
         episode_rewards = []
         episode_successes = []
