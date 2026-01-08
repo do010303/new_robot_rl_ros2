@@ -455,12 +455,15 @@ class RLEnvironment(Node):
         dist_after = next_state[15]  # dist_3d
         reward, done = self._calculate_reward(dist_after, dist_before)
         
-        # Check for ground collision (Z < 0.01m) - AUTO RECOVERY
-        if self.robot_z < 0.01:
-            reward = -50.0
+        # Check for ground collision (Z <= 5cm) - SAFETY FEATURE
+        # Heavy penalty to prevent robot from breaking by hitting ground
+        GROUND_SAFETY_Z = 0.05  # 5cm - anything below this is dangerous
+        if self.robot_z <= GROUND_SAFETY_Z:
+            reward = -50.0  # Heavy penalty for dangerous position
             done = True
-            self.get_logger().warn(f"⚠️ Ground collision! Z={self.robot_z:.3f}m - Resetting to home...")
-            # AUTO-RESET: Move robot to home position to prevent getting stuck
+            self.get_logger().warn(f"⚠️ DANGER! Robot too low! Z={self.robot_z*100:.1f}cm <= {GROUND_SAFETY_Z*100:.0f}cm")
+            self.get_logger().warn(f"   Heavy penalty applied (-50) - Resetting to home...")
+            # AUTO-RESET: Move robot to home position to prevent damage
             home_position = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
             self._move_to_joint_positions(home_position, duration=1.0)
             time.sleep(0.5)  # Wait for recovery
