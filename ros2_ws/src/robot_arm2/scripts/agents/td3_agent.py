@@ -294,6 +294,10 @@ class TD3Agent:
         if self.replay_buffer.size() < max(self.batch_size, 1000):
             return None, None
         
+        # Ensure networks are in training mode for gradient updates
+        self.actor.train()
+        self.critic.train()
+        
         self.total_it += 1
         
         # Sample batch

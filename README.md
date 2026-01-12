@@ -64,6 +64,10 @@ Saved to `scripts/training_results/`:
 
 Deploy trained models to Raspberry Pi for real robot control.
 
+### Model Specs
+- **State**: 16D (joints(6), robot_xyz(3), target_xyz(3), dist_xyz(3), dist_3d(1))
+- **Action**: 6D absolute joint angles (±90° / ±1.57 rad)
+
 ### Quick Deploy
 
 ```bash
@@ -73,18 +77,34 @@ cd ros2_ws/src/robot_arm2/scripts/deployment
 
 ### Manual Deployment
 
+#### 1. Export Model to TFLite (on PC)
+Since TFLite conversion requires specific TensorFlow versions incompatible with some system packages, we use a temporary virtual environment:
+
 ```bash
-# 1. Export model to TFLite
-python3 export_tflite.py --model ../checkpoints/sac_gazebo/actor_sac_best.pth
+cd ros2_ws/src/robot_arm2/scripts/deployment
 
-# Or with quantization for smaller size (~4x reduction)
-python3 export_tflite.py --model ../checkpoints/sac_gazebo/actor_sac_best.pth --quantize
+# 1. Create conversion environment (one-time setup)
+python3 -m venv /tmp/tflite_env
+/tmp/tflite_env/bin/pip install tensorflow onnx==1.12.0 onnx-tf
 
-# 2. Copy to Pi
-scp ../checkpoints/sac_gazebo/actor_sac_best.tflite pi@<pi_ip>:~/rl_deployment/
+# 2. Export & Convert
+# Step A: PyTorch -> ONNX
+python3 pytorch_to_onnx.py --model ../checkpoints/sac_gazebo/actor_sac_best.pth
 
-# 3. Run on Pi
-python3 deploy_on_pi.py --model actor_sac_best.tflite
+# Step B: ONNX -> TFLite (using virtualenv)
+/tmp/tflite_env/bin/python3 onnx_to_tflite.py --model ../checkpoints/sac_gazebo/actor_sac_best.onnx --quantize
+# Output: ../checkpoints/sac_gazebo/actor_sac_best_quantized.tflite
+```
+
+#### 2. Copy to Pi & Run
+
+```bash
+# Easy way: use the script (prompts for IP)
+./deploy_to_pi.sh
+
+# Manual way:
+scp ../checkpoints/sac_gazebo/actor_sac_best_quantized.tflite pi@<pi_ip>:~/rl_deployment/
+python3 deploy_on_pi.py --model actor_sac_best_quantized.tflite
 ```
 
 ### Deployment Files
@@ -92,9 +112,10 @@ python3 deploy_on_pi.py --model actor_sac_best.tflite
 | File | Purpose |
 |------|---------|
 | `deploy_to_pi.sh` | One-command deployment via SSH |
-| `export_tflite.py` | Convert PyTorch → TFLite |
+| `export_tflite.py` | Convert PyTorch → TFLite (no ONNX) |
 | `pi_servo_interface.py` | PCA9685 servo control node |
 | `deploy_on_pi.py` | Run TFLite model on Pi |
+| `fk_ik_utils.py` | Forward kinematics (required) |
 
 ## 🔧 Prerequisites
 

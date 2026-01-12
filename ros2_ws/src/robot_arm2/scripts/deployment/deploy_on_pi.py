@@ -2,8 +2,8 @@
 """
 Deploy Trained RL Model on Raspberry Pi - ROS2 Humble
 
-Run trained ONNX/TFLite model on Raspberry Pi to control the real 6DOF robot arm.
-Uses direct joint control (no IK) with the pi_servo_interface node.
+Run trained TFLite model on Raspberry Pi to control the real 6DOF robot arm.
+Uses DIRECT JOINT CONTROL - model outputs absolute joint angles, no IK needed!
 
 Hardware Requirements:
     - Raspberry Pi (3B+/4/5)
@@ -12,22 +12,22 @@ Hardware Requirements:
 
 Software Requirements:
     - ROS2 Humble
-    - onnxruntime: pip3 install onnxruntime
+    - tflite-runtime: pip3 install tflite-runtime
     - pi_servo_interface running
 
 Usage:
     # Start servo interface first:
     ros2 run robot_arm2 pi_servo_interface
     
-    # Then run deployment (ONNX format):
-    python3 deploy_on_pi.py --model actor_sac_best.onnx
+    # Then run deployment (TFLite format):
+    python3 deploy_on_pi.py --model actor_sac_best.tflite
     
     # With custom target position:
-    python3 deploy_on_pi.py --model actor_sac_best.onnx --target 0.15 -0.05 0.30
+    python3 deploy_on_pi.py --model actor_sac_best.tflite --target 0.15 -0.20 0.25
 
 Model Specs:
-    - State: 18D (joints(6), robot_xyz(3), target_xyz(3), dist_xyz(3), dist_3d(1), vel(2))
-    - Action: 6D (joint angle deltas, ±0.1 rad)
+    - State: 16D (joints(6), robot_xyz(3), target_xyz(3), dist_xyz(3), dist_3d(1))
+    - Action: 6D (ABSOLUTE joint angles, ±90° / ±1.57 rad)
 """
 
 import rclpy
@@ -50,7 +50,14 @@ parent_dir = os.path.dirname(script_dir)
 sys.path.insert(0, parent_dir)
 sys.path.insert(0, os.path.join(parent_dir, 'rl'))
 
-# Import TFLite Runtime
+# Import ONNX Runtime (preferred - more stable on Pi)
+try:
+    import onnxruntime as ort
+    ONNX_AVAILABLE = True
+except ImportError:
+    ONNX_AVAILABLE = False
+
+# Import TFLite Runtime (fallback)
 try:
     import tflite_runtime.interpreter as tflite
     TFLITE_AVAILABLE = True
@@ -60,11 +67,15 @@ except ImportError:
         TFLITE_AVAILABLE = True
     except ImportError:
         TFLITE_AVAILABLE = False
-        print("❌ TFLite Runtime not found - install with: pip3 install tflite-runtime")
 
-# Try to import FK utilities
+if not ONNX_AVAILABLE and not TFLITE_AVAILABLE:
+    print("❌ No inference runtime found!")
+    print("   Install ONNX Runtime: pip3 install onnxruntime")
+    print("   Or TFLite Runtime:    pip3 install tflite-runtime")
+
+# Try to import FK utilities from rl/fk_ik_utils.py
 try:
-    from fk_ik_utils import forward_kinematics
+    from fk_ik_utils import fk as forward_kinematics
     FK_AVAILABLE = True
 except ImportError:
     FK_AVAILABLE = False
@@ -76,32 +87,33 @@ except ImportError:
 # ============================================================================
 
 # State/Action dimensions (must match training)
-STATE_DIM = 18
-ACTION_DIM = 6
+STATE_DIM = 16  # joints(6) + robot_xyz(3) + target_xyz(3) + dist_xyz(3) + dist_3d(1)
+ACTION_DIM = 6  # Absolute joint angles
 
-# Action scaling (joint angle delta per step)
-MAX_JOINT_DELTA = 0.1  # radians (~5.7°)
+# Action scaling - model outputs ABSOLUTE joint angles in radians
+# tanh output * max_action = direct joint position
+MAX_ACTION = 1.5708  # ±90° in radians (π/2)
 
 # Control rate
-CONTROL_RATE_HZ = 10.0
+CONTROL_RATE_HZ = 5.0  # 5 Hz for real robot (slower than simulation)
 
-# Joint limits (radians) - must match training
+# Joint limits (radians) - all joints ±90°
 JOINT_LIMITS = np.array([
-    [-3.14159, 3.14159],  # Joint 1: ±180°
-    [-1.5708, 1.5708],    # Joint 2: ±90°
-    [-1.5708, 1.5708],    # Joint 3: ±90°
-    [-1.5708, 1.5708],    # Joint 4: ±90°
-    [-3.14159, 3.14159],  # Joint 5: ±180°
-    [-3.14159, 3.14159],  # Joint 6: ±180°
+    [-1.5708, 1.5708],  # Joint 1: ±90°
+    [-1.5708, 1.5708],  # Joint 2: ±90°
+    [-1.5708, 1.5708],  # Joint 3: ±90°
+    [-1.5708, 1.5708],  # Joint 4: ±90°
+    [-1.5708, 1.5708],  # Joint 5: ±90°
+    [-1.5708, 1.5708],  # Joint 6: ±90°
 ])
 
-# Workspace bounds (meters) - 3D workspace
-WORKSPACE_X = (0.03, 0.27)   # 3-27cm
-WORKSPACE_Y = (-0.12, 0.12)  # ±12cm
-WORKSPACE_Z = (0.18, 0.42)   # 18-42cm
+# Workspace bounds (meters) - matches training (UPDATED)
+WORKSPACE_X = (-0.24, 0.24)   # ±24cm
+WORKSPACE_Y = (-0.35, -0.05)  # -35cm to -5cm (in front of robot)
+WORKSPACE_Z = (0.08, 0.40)    # 8-40cm
 
-# Default target position
-DEFAULT_TARGET = np.array([0.15, 0.0, 0.30])  # Center of workspace
+# Default target position (center of workspace)
+DEFAULT_TARGET = np.array([0.0, -0.20, 0.24])  # Center of workspace
 
 # Goal threshold for success
 GOAL_THRESHOLD = 0.01  # 1cm
@@ -161,14 +173,19 @@ class RLDeploymentNode(Node):
         self.model_path = model_path
         self.log_performance = log_performance
         
-        # Load TFLite model
-        if not TFLITE_AVAILABLE:
-            raise RuntimeError("TFLite runtime not available! Install with: pip3 install tflite-runtime")
-        
-        if not model_path.endswith('.tflite'):
-            model_path = model_path + '.tflite'
-        
-        self._load_tflite_model(model_path)
+        # Detect model type and load
+        if model_path.endswith('.onnx'):
+            self._load_onnx_model(model_path)
+        elif model_path.endswith('.tflite'):
+            self._load_tflite_model(model_path)
+        else:
+            # Try ONNX first, then TFLite
+            if os.path.exists(model_path + '.onnx') and ONNX_AVAILABLE:
+                self._load_onnx_model(model_path + '.onnx')
+            elif os.path.exists(model_path + '.tflite') and TFLITE_AVAILABLE:
+                self._load_tflite_model(model_path + '.tflite')
+            else:
+                raise RuntimeError(f"Model not found: {model_path}.onnx or {model_path}.tflite")
         
         # Current state
         self.joint_positions = np.zeros(6, dtype=np.float32)
@@ -178,6 +195,26 @@ class RLDeploymentNode(Node):
         
         # Setup ROS2 interfaces
         self._setup_ros2_interfaces()
+    
+    def _load_onnx_model(self, model_path: str):
+        """Load ONNX model using ONNX Runtime"""
+        if not ONNX_AVAILABLE:
+            raise RuntimeError("ONNX Runtime not available! pip install onnxruntime")
+        
+        self.get_logger().info(f"\n📦 Loading ONNX model: {model_path}")
+        
+        self.ort_session = ort.InferenceSession(model_path)
+        self.input_name = self.ort_session.get_inputs()[0].name
+        self.output_name = self.ort_session.get_outputs()[0].name
+        
+        input_shape = self.ort_session.get_inputs()[0].shape
+        output_shape = self.ort_session.get_outputs()[0].shape
+        
+        self.get_logger().info(f"✅ ONNX model loaded")
+        self.get_logger().info(f"   Input: {input_shape}")
+        self.get_logger().info(f"   Output: {output_shape}")
+        
+        self.model_type = 'onnx'
     
     def _load_tflite_model(self, model_path: str):
         """Load TFLite model"""
@@ -195,12 +232,6 @@ class RLDeploymentNode(Node):
         self.get_logger().info(f"✅ TFLite model loaded")
         self.get_logger().info(f"   Input: {self.input_details['shape']}")
         self.get_logger().info(f"   Output: {self.output_details['shape']}")
-        
-        # Verify dimensions
-        if self.input_details['shape'][1] != STATE_DIM:
-            self.get_logger().warn(f"Model expects state dim {self.input_details['shape'][1]}, expected {STATE_DIM}")
-        if self.output_details['shape'][1] != ACTION_DIM:
-            self.get_logger().warn(f"Model expects action dim {self.output_details['shape'][1]}, expected {ACTION_DIM}")
         
         self.model_type = 'tflite'
     
@@ -255,9 +286,10 @@ class RLDeploymentNode(Node):
     
     def get_state(self) -> np.ndarray:
         """
-        Construct 18D state vector matching training format
+        Construct 16D state vector matching training format
         
-        State: [joints(6), robot_xyz(3), target_xyz(3), dist_xyz(3), dist_3d(1), vel(2)]
+        State: [joints(6), robot_xyz(3), target_xyz(3), dist_xyz(3), dist_3d(1)]
+        NOTE: No velocities in new architecture
         """
         # Get current EE position
         ee_pos = get_ee_position(self.joint_positions)
@@ -266,24 +298,20 @@ class RLDeploymentNode(Node):
         dist_xyz = ee_pos - self.target_position
         dist_3d = np.linalg.norm(dist_xyz)
         
-        # Key velocities (joints 1 and 2 for now)
-        key_velocities = self.joint_velocities[:2]
-        
-        # Construct state
+        # Construct 16D state (NO velocities)
         state = np.concatenate([
             self.joint_positions,      # 6: joint angles
             ee_pos,                    # 3: end-effector XYZ
             self.target_position,      # 3: target XYZ
             dist_xyz,                  # 3: distance XYZ
-            [dist_3d],                 # 1: distance 3D
-            key_velocities             # 2: key velocities
+            [dist_3d]                  # 1: distance 3D
         ]).astype(np.float32)
         
         return state
     
     def run_inference(self, state: np.ndarray) -> tuple:
         """
-        Run TFLite model inference
+        Run model inference (ONNX or TFLite)
         
         Returns:
             (action, latency_ms)
@@ -292,23 +320,32 @@ class RLDeploymentNode(Node):
         
         input_data = np.expand_dims(state, axis=0).astype(np.float32)
         
-        # TFLite inference
-        self.interpreter.set_tensor(self.input_details['index'], input_data)
-        self.interpreter.invoke()
-        action = self.interpreter.get_tensor(self.output_details['index'])[0]
+        if self.model_type == 'onnx':
+            # ONNX Runtime inference
+            action = self.ort_session.run(
+                [self.output_name], 
+                {self.input_name: input_data}
+            )[0][0]
+        else:
+            # TFLite inference
+            self.interpreter.set_tensor(self.input_details['index'], input_data)
+            self.interpreter.invoke()
+            action = self.interpreter.get_tensor(self.output_details['index'])[0]
         
         latency_ms = (time.perf_counter() - start) * 1000
         return action, latency_ms
     
     def apply_action(self, action: np.ndarray):
-        """Apply joint delta action to robot"""
-        # Scale action (model outputs in [-1, 1])
-        joint_deltas = action * MAX_JOINT_DELTA
+        """
+        Apply ABSOLUTE joint positions to robot
         
-        # Compute new positions
-        new_positions = self.joint_positions + joint_deltas
+        Model outputs are already in radians (tanh * π/2 = ±90°)
+        No delta calculation needed - direct joint control!
+        """
+        # Action IS the absolute joint position (already scaled by max_action in model)
+        new_positions = action.copy()
         
-        # Apply joint limits
+        # Safety: Apply joint limits
         for i in range(6):
             new_positions[i] = np.clip(new_positions[i], JOINT_LIMITS[i, 0], JOINT_LIMITS[i, 1])
         

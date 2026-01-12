@@ -9,13 +9,13 @@ IMPORTANT: Run this script in a FRESH terminal (not after importing PyTorch else
 to avoid protobuf conflicts.
 
 Model Specs (6DOF Robot - Direct Joint Control):
-    - State dim: 18 (joints(6) + robot_xyz(3) + target_xyz(3) + dist(4) + vel(2))
-    - Action dim: 6 (joint angle deltas)
+    - State dim: 16 (joints(6) + robot_xyz(3) + target_xyz(3) + dist_xyz(3) + dist_3d(1))
+    - Action dim: 6 (absolute joint angles, ±90° / ±1.57 rad)
 
 Usage:
     python3 export_tflite.py --model ../checkpoints/sac_gazebo/actor_sac_best.pth
     python3 export_tflite.py --model ../checkpoints/sac_gazebo/actor_sac_best.pth --quantize
-    python3 export_tflite.py --model ../checkpoints/td3/actor_td3_best.pth --agent td3
+    python3 export_tflite.py --model ../checkpoints/td3_gazebo/actor_td3_best.pth --agent td3
 """
 
 # IMPORTANT: Import TensorFlow FIRST to avoid protobuf conflicts
@@ -35,7 +35,7 @@ sys.path.insert(0, parent_dir)
 
 
 def convert_to_tflite(model_path: str, output_path: str = None, quantize: bool = False, 
-                      state_dim: int = 18, action_dim: int = 6, agent_type: str = 'sac'):
+                      state_dim: int = 16, action_dim: int = 6, agent_type: str = 'sac'):
     """
     Convert trained actor model to TensorFlow Lite format
     
@@ -43,8 +43,8 @@ def convert_to_tflite(model_path: str, output_path: str = None, quantize: bool =
         model_path: Path to model file (.pth or base path)
         output_path: Output .tflite file path (auto-generated if None)
         quantize: Apply post-training quantization for smaller model
-        state_dim: State dimension (default: 18 for our 6DOF robot)
-        action_dim: Action dimension (default: 6 for joint deltas)
+        state_dim: State dimension (default: 16 for our 6DOF robot)
+        action_dim: Action dimension (default: 6 for absolute joint angles)
         agent_type: 'sac' or 'td3'
     """
     print("="*70)
@@ -76,10 +76,13 @@ def convert_to_tflite(model_path: str, output_path: str = None, quantize: bool =
         import torch.nn as nn
         
         # Define actor network matching training architecture
+        # max_action = π/2 (1.5708 rad = 90°) for absolute joint control
+        MAX_ACTION = 1.5708  # ±90° in radians
+        
         if agent_type == 'sac':
             # SAC GaussianActor - simplified for inference (mean only)
             class ActorNetwork(nn.Module):
-                def __init__(self, state_dim, action_dim, max_action=0.1):
+                def __init__(self, state_dim, action_dim, max_action=MAX_ACTION):
                     super().__init__()
                     self.max_action = max_action
                     self.l1 = nn.Linear(state_dim, 256)
@@ -94,7 +97,7 @@ def convert_to_tflite(model_path: str, output_path: str = None, quantize: bool =
         else:
             # TD3 Actor
             class ActorNetwork(nn.Module):
-                def __init__(self, state_dim, action_dim, max_action=0.1):
+                def __init__(self, state_dim, action_dim, max_action=MAX_ACTION):
                     super().__init__()
                     self.max_action = max_action
                     self.l1 = nn.Linear(state_dim, 400)
@@ -106,7 +109,7 @@ def convert_to_tflite(model_path: str, output_path: str = None, quantize: bool =
                     x = torch.relu(self.l2(x))
                     return torch.tanh(self.l3(x)) * self.max_action
         
-        actor_network = ActorNetwork(state_dim, action_dim, max_action=0.1)
+        actor_network = ActorNetwork(state_dim, action_dim, max_action=MAX_ACTION)
         
         # Load trained weights
         try:
@@ -128,7 +131,7 @@ def convert_to_tflite(model_path: str, output_path: str = None, quantize: bool =
         return False
     
     # 3. Convert PyTorch → ONNX → TensorFlow → TFLite
-    print(f"\n⚙️  Converting PyTorch → ONNX → TensorFlow → TFLite...")
+    print(f"\n⚙️  Converting PyTorch → ONNX → TFLite...")
     print(f"   Quantization: {'ENABLED' if quantize else 'DISABLED'}")
     
     try:
@@ -153,26 +156,21 @@ def convert_to_tflite(model_path: str, output_path: str = None, quantize: bool =
         )
         print("   ✅ ONNX export successful")
         
-        # Step 2: ONNX → TensorFlow
+        # Step 2: ONNX → TensorFlow SavedModel
         print("   Step 2/3: ONNX → TensorFlow...")
         onnx_model = onnx.load(onnx_path)
         tf_rep = prepare(onnx_model)
+        
+        import tempfile
+        temp_dir = tempfile.mkdtemp()
+        saved_model_path = os.path.join(temp_dir, "saved_model")
+        tf_rep.export_graph(saved_model_path)
         print("   ✅ TensorFlow conversion successful")
         
         # Step 3: TensorFlow → TFLite
         print("   Step 3/3: TensorFlow → TFLite...")
-        
-        # Export to SavedModel first
-        import tempfile
-        temp_dir = tempfile.mkdtemp()
-        saved_model_path = os.path.join(temp_dir, "saved_model")
-        
-        tf_rep.export_graph(saved_model_path)
-        
-        # Convert SavedModel to TFLite
         converter = tf.lite.TFLiteConverter.from_saved_model(saved_model_path)
         
-        # Apply optimizations
         if quantize:
             converter.optimizations = [tf.lite.Optimize.DEFAULT]
         else:
@@ -181,7 +179,7 @@ def convert_to_tflite(model_path: str, output_path: str = None, quantize: bool =
         tflite_model = converter.convert()
         print("   ✅ Conversion successful!")
         
-        # Clean up temporary files
+        # Clean up
         import shutil
         if os.path.exists(onnx_path):
             os.remove(onnx_path)
@@ -292,8 +290,8 @@ Note: Run this script in a FRESH terminal to avoid protobuf conflicts!
                         help='Agent type: sac or td3 (default: sac)')
     parser.add_argument('--quantize', '-q', action='store_true',
                         help='Apply post-training quantization (reduces size ~4x, recommended)')
-    parser.add_argument('--state-dim', type=int, default=18,
-                        help='State dimension (default: 18)')
+    parser.add_argument('--state-dim', type=int, default=16,
+                        help='State dimension (default: 16)')
     parser.add_argument('--action-dim', type=int, default=6,
                         help='Action dimension (default: 6)')
     

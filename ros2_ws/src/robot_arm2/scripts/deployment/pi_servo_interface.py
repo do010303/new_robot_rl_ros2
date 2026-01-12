@@ -43,10 +43,15 @@ except ImportError:
 # CONFIGURATION
 # ============================================================================
 
-# Servo channel mapping for 6DOF arm
-SERVO_CHANNELS = [0, 1, 2, 3, 4, 5]  # PCA9685 channels for joints 1-6
+# Servo channel mapping for 7-servo arm (CH0-6)
+# CH1 and CH2 are mirrored pair for shoulder joint
+SERVO_CHANNELS = [0, 1, 2, 3, 4, 5, 6]  # PCA9685 channels
 
-# Joint names (matching URDF)
+# Mirror configuration: CH1 and CH2 work together
+# When setting CH1, CH2 automatically gets (180 - angle)
+MIRROR_PAIRS = {1: 2, 2: 1}  # CH1 <-> CH2 mirrored
+
+# Joint names (matching URDF - 6 logical joints, but 7 servos)
 JOINT_NAMES = ['Joint 1', 'Joint 2', 'Joint 3', 'Joint 4', 'Joint 5', 'Joint 6']
 
 # Joint limits in radians (from URDF)
@@ -60,15 +65,14 @@ JOINT_LIMITS = {
 }
 
 # Servo calibration: maps radians to servo degrees
-# Format: (rad_min, rad_max) -> (servo_deg_min, servo_deg_max)
-# Adjust these based on your physical servo mounting
 SERVO_CALIBRATION = {
     0: {'rad_range': (-3.14159, 3.14159), 'deg_range': (0, 180), 'invert': False},
     1: {'rad_range': (-1.5708, 1.5708), 'deg_range': (0, 180), 'invert': False},
-    2: {'rad_range': (-1.5708, 1.5708), 'deg_range': (0, 180), 'invert': True},
+    2: {'rad_range': (-1.5708, 1.5708), 'deg_range': (0, 180), 'invert': True},  # Mirror of CH1
     3: {'rad_range': (-1.5708, 1.5708), 'deg_range': (0, 180), 'invert': False},
-    4: {'rad_range': (-3.14159, 3.14159), 'deg_range': (0, 180), 'invert': False},
+    4: {'rad_range': (-1.5708, 1.5708), 'deg_range': (0, 180), 'invert': False},
     5: {'rad_range': (-3.14159, 3.14159), 'deg_range': (0, 180), 'invert': False},
+    6: {'rad_range': (-3.14159, 3.14159), 'deg_range': (0, 180), 'invert': False},
 }
 
 # Home position in radians
@@ -202,8 +206,11 @@ class PiServoInterface(Node):
         rad = rad_min + ratio * (rad_max - rad_min)
         return float(rad)
     
-    def set_servo_position(self, channel: int, angle_rad: float) -> bool:
-        """Set servo position in radians"""
+    def set_servo_position(self, channel: int, angle_rad: float, skip_mirror: bool = False) -> bool:
+        """Set servo position in radians
+        
+        CH1 and CH2 are mirrored - setting one sets both automatically.
+        """
         if not self.enabled:
             self.get_logger().warn("Servos not enabled!", throttle_duration_sec=1.0)
             return False
@@ -217,6 +224,14 @@ class PiServoInterface(Node):
         if self.kit is not None:
             try:
                 self.kit.servo[channel].angle = angle_deg
+                
+                # Apply mirroring for CH1 <-> CH2
+                if not skip_mirror and channel in MIRROR_PAIRS:
+                    mirror_ch = MIRROR_PAIRS[channel]
+                    mirror_deg = 180 - angle_deg
+                    self.kit.servo[mirror_ch].angle = mirror_deg
+                    self.get_logger().debug(f"Mirror CH{mirror_ch} -> {mirror_deg:.1f}°")
+                
                 return True
             except Exception as e:
                 self.get_logger().error(f"Failed to set servo {channel}: {e}")

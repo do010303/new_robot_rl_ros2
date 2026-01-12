@@ -7,12 +7,20 @@ echo "========================================================================"
 
 # Configuration
 PI_USER="pi"
-PI_HOST="192.168.11.1"  # ⚠️ CHANGE THIS to your Pi's actual IP address!
+DEFAULT_PI_IP="192.168.1.100"
 PI_RL_DIR="/home/pi/rl_deployment"
 
-# Model configuration (TFLite preferred - smaller and faster on Pi)
-TFLITE_MODEL="checkpoints/sac_gazebo/actor_sac_best.tflite"
-SCRIPTS_DIR="ros2_ws/src/robot_arm2/scripts"
+# Prompt for IP address
+read -p "Enter Raspberry Pi IP address [${DEFAULT_PI_IP}]: " PI_HOST
+PI_HOST=${PI_HOST:-$DEFAULT_PI_IP}
+
+# Model configuration
+# We expect the model to be in the checkpoints directory relative to the workspace
+# Script is usually run from ros2_ws/src/robot_arm2/scripts/deployment or ros2_ws/
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE_DIR="$(cd "${SCRIPT_DIR}/../../../../.." && pwd)"
+CHECKPOINT_DIR="${WORKSPACE_DIR}/ros2_ws/src/robot_arm2/scripts/checkpoints/sac_gazebo"
+TFLITE_MODEL="${CHECKPOINT_DIR}/actor_sac_best_quantized.tflite"
 
 echo ""
 echo "📋 Deployment Configuration:"
@@ -23,16 +31,26 @@ echo ""
 
 # Check if TFLite model exists
 if [ ! -f "${TFLITE_MODEL}" ]; then
-    echo "❌ ERROR: TFLite model not found at ${TFLITE_MODEL}"
-    echo ""
-    echo "📝 Please export your trained model first:"
-    echo "   cd ${SCRIPTS_DIR}/deployment"
-    echo "   python3 export_model.py --model ../checkpoints/sac_gazebo/actor_sac_best.pth --format tflite"
-    echo ""
-    echo "   Or with quantization (smaller size):"
-    echo "   python3 export_model.py --model ../checkpoints/sac_gazebo/actor_sac_best.pth --format tflite --quantize"
-    echo ""
-    exit 1
+    # Try alternate path if running from different location
+    if [ -f "actor_sac_best_quantized.tflite" ]; then
+         TFLITE_MODEL="actor_sac_best_quantized.tflite"
+    elif [ -f "../checkpoints/sac_gazebo/actor_sac_best_quantized.tflite" ]; then
+         TFLITE_MODEL="../checkpoints/sac_gazebo/actor_sac_best_quantized.tflite"
+    else
+        echo "❌ ERROR: TFLite model not found at ${TFLITE_MODEL}"
+        echo ""
+        echo "📝 Please export your trained model first:"
+        echo "   1. Create virtualenv for conversion tool:"
+        echo "      python3 -m venv /tmp/tflite_env"
+        echo "      /tmp/tflite_env/bin/pip install tensorflow onnx==1.12.0 onnx-tf"
+        echo ""
+        echo "   2. Run conversion:"
+        echo "      cd ${SCRIPT_DIR}"
+        echo "      python3 pytorch_to_onnx.py --model ../checkpoints/sac_gazebo/actor_sac_best.pth"
+        echo "      /tmp/tflite_env/bin/python3 onnx_to_tflite.py --model ../checkpoints/sac_gazebo/actor_sac_best.onnx --quantize"
+        echo ""
+        exit 1
+    fi
 fi
 
 echo "✅ TFLite model found ($(du -h ${TFLITE_MODEL} | cut -f1))"
@@ -71,15 +89,19 @@ scp "${TFLITE_MODEL}" ${PI_USER}@${PI_HOST}:${PI_RL_DIR}/
 # Copy deployment scripts
 echo ""
 echo "📦 Copying deployment scripts..."
-scp ${SCRIPTS_DIR}/deployment/deploy_on_pi.py ${PI_USER}@${PI_HOST}:${PI_RL_DIR}/
-scp ${SCRIPTS_DIR}/deployment/pi_servo_interface.py ${PI_USER}@${PI_HOST}:${PI_RL_DIR}/
+scp ${SCRIPT_DIR}/deploy_on_pi.py ${PI_USER}@${PI_HOST}:${PI_RL_DIR}/
+scp ${SCRIPT_DIR}/pi_servo_interface.py ${PI_USER}@${PI_HOST}:${PI_RL_DIR}/
 
-# Copy FK/IK utilities if exists
-if [ -f "${SCRIPTS_DIR}/rl/fk_ik_utils.py" ]; then
-    echo ""
-    echo "📦 Copying FK/IK utilities..."
-    scp ${SCRIPTS_DIR}/rl/fk_ik_utils.py ${PI_USER}@${PI_HOST}:${PI_RL_DIR}/
-fi
+# Copy FK utilities (REQUIRED for deploy_on_pi.py)
+echo ""
+echo "📦 Copying FK utilities..."
+SCRIPTS_PARENT_DIR="$(dirname "${SCRIPT_DIR}")"
+scp ${SCRIPTS_PARENT_DIR}/rl/fk_ik_utils.py ${PI_USER}@${PI_HOST}:${PI_RL_DIR}/
+
+# Copy servo test script
+echo ""
+echo "📦 Copying servo test script..."
+scp ${SCRIPT_DIR}/test1servo.py ${PI_USER}@${PI_HOST}:${PI_RL_DIR}/
 
 # Make scripts executable on Pi
 echo ""
@@ -120,6 +142,7 @@ echo "📝 Files deployed to Pi (${PI_RL_DIR}):"
 echo "   ✓ $(basename ${TFLITE_MODEL})"
 echo "   ✓ deploy_on_pi.py"
 echo "   ✓ pi_servo_interface.py"
+echo "   ✓ fk_ik_utils.py"
 echo ""
 echo "========================================================================"
 echo "🚀 Next Steps on Raspberry Pi"
@@ -134,7 +157,7 @@ echo "    cd ~/rl_deployment"
 echo "    python3 deploy_on_pi.py --model $(basename ${TFLITE_MODEL})"
 echo ""
 echo "  Options:"
-echo "    --target 0.15 0.0 0.30    # Custom target position (x y z)"
+echo "    --target 0.0 -0.20 0.25   # Custom target position (x y z)"
 echo "    --episodes 5              # Number of episodes"
 echo "    --steps 100               # Max steps per episode"
 echo ""
