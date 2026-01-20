@@ -906,6 +906,253 @@ Steps:
     print(f"📊 Training data saved to: {csv_path}")
 
 
+def plot_drawing_stats(episode_rewards, waypoints_reached, shape_completions,
+                       actor_losses, critic_losses, episode_trajectories,
+                       target_waypoints, mode_suffix='drawing'):
+    """
+    Plot training statistics for drawing task.
+    
+    Creates 6 subplots:
+    1. Episode Rewards
+    2. Waypoints Reached per Episode (Y: 0-30, X: episode)
+    3. Shape Completion Rate
+    4. Training Losses
+    5. Trajectory Visualization vs Target Triangle
+    6. Summary Stats
+    """
+    import matplotlib.pyplot as plt
+    from datetime import datetime
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Create output directories
+    png_dir = os.path.join(os.path.dirname(__file__), 'training_results', 'png')
+    csv_dir = os.path.join(os.path.dirname(__file__), 'training_results', 'csv')
+    os.makedirs(png_dir, exist_ok=True)
+    os.makedirs(csv_dir, exist_ok=True)
+    
+    episodes = list(range(1, len(episode_rewards) + 1))
+    
+    # Cumulative averages
+    def cumulative_avg(data):
+        return [np.mean(data[:i+1]) for i in range(len(data))]
+    
+    reward_avg = cumulative_avg(episode_rewards)
+    waypoints_avg = cumulative_avg(waypoints_reached)
+    
+    # Create figure with 2x3 subplots
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    title = f'Drawing Training Statistics - {mode_suffix.upper().replace("_", " + ")}'
+    fig.suptitle(title, fontsize=16, fontweight='bold')
+    
+    # Plot 1: Episode Rewards (top-left)
+    ax = axes[0, 0]
+    ax.plot(episodes, episode_rewards, alpha=0.3, color='blue', linewidth=1.5, label='Episode Reward')
+    ax.plot(episodes, reward_avg, color='darkblue', linewidth=3.0, label='Cumulative Average')
+    ax.set_xlabel('Episode', fontsize=12)
+    ax.set_ylabel('Reward', fontsize=12)
+    ax.set_title('Episode Rewards', fontsize=14, fontweight='bold')
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+    
+    # Plot 2: Waypoints Reached (top-center) - Y-axis: 0-30, X-axis: episode
+    ax = axes[0, 1]
+    ax.scatter(episodes, waypoints_reached, marker='o', color='green', s=40, alpha=0.6, label='Waypoints')
+    ax.plot(episodes, waypoints_avg, color='darkgreen', linewidth=3.0, label='Cumulative Average')
+    ax.axhline(y=30, color='gold', linestyle='--', linewidth=2, label='Target (30)')
+    ax.set_xlabel('Episode', fontsize=12)
+    ax.set_ylabel('Waypoints Reached', fontsize=12)
+    ax.set_title('Waypoints Reached per Episode', fontsize=14, fontweight='bold')
+    ax.set_ylim([-1, 32])
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+    
+    # Plot 3: Shape Completion Rate (top-right)
+    ax = axes[0, 2]
+    completion_pct = [100.0 if c else 0.0 for c in shape_completions]
+    completion_avg = cumulative_avg([1.0 if c else 0.0 for c in shape_completions])
+    completion_avg_pct = [c * 100 for c in completion_avg]
+    
+    # O for complete, X for incomplete
+    complete_eps = [ep for ep, c in zip(episodes, shape_completions) if c]
+    incomplete_eps = [ep for ep, c in zip(episodes, shape_completions) if not c]
+    
+    ax.scatter(complete_eps, [100]*len(complete_eps), marker='o', color='green', s=40, alpha=0.6, label='Complete')
+    ax.scatter(incomplete_eps, [0]*len(incomplete_eps), marker='x', color='red', s=40, alpha=0.6, label='Incomplete')
+    ax.plot(episodes, completion_avg_pct, color='darkgreen', linewidth=3.0, label='Completion Rate %')
+    ax.set_xlabel('Episode', fontsize=12)
+    ax.set_ylabel('Completion (%)', fontsize=12)
+    ax.set_title('Shape Completion Rate', fontsize=14, fontweight='bold')
+    ax.set_ylim([-5, 105])
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+    
+    # Plot 4: Training Losses (bottom-left)
+    ax = axes[1, 0]
+    valid_actor = [(i+1, l) for i, l in enumerate(actor_losses) if l is not None]
+    valid_critic = [(i+1, l) for i, l in enumerate(critic_losses) if l is not None]
+    
+    if valid_actor:
+        actor_eps, actor_vals = zip(*valid_actor)
+        ax.plot(actor_eps, actor_vals, color='blue', linewidth=1.5, alpha=0.8, label='Actor Loss')
+    if valid_critic:
+        critic_eps, critic_vals = zip(*valid_critic)
+        ax.plot(critic_eps, critic_vals, color='orange', linewidth=1.5, alpha=0.8, label='Critic Loss')
+    
+    if valid_actor or valid_critic:
+        ax.set_xlabel('Episode', fontsize=12)
+        ax.set_ylabel('Loss', fontsize=12)
+        ax.set_title('Training Losses', fontsize=14, fontweight='bold')
+        ax.legend(fontsize=10)
+        ax.grid(True, alpha=0.3)
+    else:
+        ax.text(0.5, 0.5, 'No Loss Data', ha='center', va='center', fontsize=12)
+        ax.set_title('Training Losses', fontsize=14, fontweight='bold')
+    
+    # Plot 5: Trajectory Visualization (bottom-center)
+    # Style: Fixed target triangle (orange line) vs Actual trajectory (blue points/line)
+    ax = axes[1, 1]
+    
+    # Draw FIXED target triangle as solid orange line (like reference image)
+    if target_waypoints is not None and len(target_waypoints) > 0:
+        # Get the 3 corners (for dense_triangle, corners are at indices 0, 10, 20)
+        n_pts = len(target_waypoints)
+        if n_pts >= 30:  # dense triangle with 30 waypoints
+            # Extract corners (every 10 points = 1 corner)
+            corners_idx = [0, 10, 20, 0]  # 3 corners + back to start
+            corner_x = [target_waypoints[i][0] * 100 for i in corners_idx]  # Convert to cm
+            corner_z = [target_waypoints[i][2] * 100 for i in corners_idx]
+            ax.plot(corner_x, corner_z, 'o-', color='orange', linewidth=3, 
+                    markersize=10, label='Target Triangle', zorder=10)
+        else:
+            # Simple triangle (3-4 waypoints)
+            target_x = [wp[0] * 100 for wp in target_waypoints]
+            target_z = [wp[2] * 100 for wp in target_waypoints]
+            target_x.append(target_x[0])
+            target_z.append(target_z[0])
+            ax.plot(target_x, target_z, 'o-', color='orange', linewidth=3, 
+                    markersize=10, label='Target Triangle', zorder=10)
+    
+    # Draw actual trajectory from BEST episode (or last episode)
+    if episode_trajectories and len(episode_trajectories) > 0:
+        # Use the LAST episode's trajectory (most recent/best trained)
+        best_traj = episode_trajectories[-1]
+        
+    # Draw actual trajectory
+    if episode_trajectories and len(episode_trajectories) > 0:
+        # 1. Scatter plot for ALL episodes (light blue) to show density
+        all_x = []
+        all_z = []
+        for traj in episode_trajectories:
+            if traj and len(traj) > 0:
+                for pt in traj:
+                    all_x.append(pt[0] * 100)
+                    all_z.append(pt[2] * 100)
+        
+        if all_x:
+            ax.scatter(all_x, all_z, c='lightblue', alpha=0.1, s=5, label='All Episodes (Density)')
+            
+        # 2. Compute and plot AVERAGE trajectory (solid blue line)
+        # Resample each trajectory to fixed number of points to compute mean
+        num_interp_points = 100
+        resampled_x = []
+        resampled_z = []
+        
+        for traj in episode_trajectories:
+            if traj and len(traj) > 5: # Need uniform enough data
+                t_np = np.array(traj)
+                x = t_np[:, 0] * 100
+                z = t_np[:, 2] * 100
+                
+                # Parameterize by cumulative distance (arc length)
+                dists = np.sqrt(np.diff(x)**2 + np.diff(z)**2)
+                cum_dist = np.insert(np.cumsum(dists), 0, 0)
+                total_dist = cum_dist[-1]
+                
+                if total_dist > 1.0: # Ignore very short/failed episodes (<1cm)
+                    # Interpolate X and Z over normalized distance 0..1
+                    t_curr = cum_dist / total_dist
+                    t_new = np.linspace(0, 1, num_interp_points)
+                    
+                    x_new = np.interp(t_new, t_curr, x)
+                    z_new = np.interp(t_new, t_curr, z)
+                    
+                    resampled_x.append(x_new)
+                    resampled_z.append(z_new)
+        
+        if resampled_x:
+            avg_x = np.mean(resampled_x, axis=0)
+            avg_z = np.mean(resampled_z, axis=0)
+            ax.plot(avg_x, avg_z, '-', color='blue', linewidth=2.5, label='Avg Trajectory')
+    
+    ax.set_xlabel('X (cm)', fontsize=12)
+    ax.set_ylabel('Z (cm)', fontsize=12)
+    ax.set_title('Target Triangle vs Actual Trajectory', fontsize=14, fontweight='bold')
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3)
+    ax.set_aspect('equal')
+    
+    # Plot 6: Summary Stats (bottom-right)
+    ax = axes[1, 2]
+    ax.axis('off')
+    
+    num_complete = sum(shape_completions)
+    completion_rate = 100.0 * num_complete / len(shape_completions) if shape_completions else 0
+    best_waypoints = max(waypoints_reached) if waypoints_reached else 0
+    avg_waypoints = np.mean(waypoints_reached) if waypoints_reached else 0
+    
+    summary_text = f"""
+📊 Drawing Training Summary
+━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Episodes: {len(episode_rewards)}
+
+Rewards:
+  • Final Avg: {reward_avg[-1]:.2f}
+  • Best: {max(episode_rewards):.2f}
+
+Waypoints:
+  • Best: {best_waypoints}/30
+  • Avg: {avg_waypoints:.1f}/30
+
+Shape Completion:
+  • Completed: {num_complete}/{len(shape_completions)}
+  • Rate: {completion_rate:.1f}%
+    """
+    ax.text(0.1, 0.5, summary_text, transform=ax.transAxes, fontsize=12,
+            verticalalignment='center', fontfamily='monospace',
+            bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.5))
+    
+    plt.tight_layout()
+    
+    # Save plot
+    plot_path = f'{png_dir}/drawing_training_{mode_suffix}_{timestamp}.png'
+    plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    
+    print(f"📊 Drawing training plot saved to: {plot_path}")
+    
+    # Save CSV
+    import csv
+    csv_path = f'{csv_dir}/drawing_training_{mode_suffix}_{timestamp}.csv'
+    with open(csv_path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['Episode', 'Reward', 'Waypoints_Reached', 'Shape_Complete', 'Actor_Loss', 'Critic_Loss'])
+        for i in range(len(episode_rewards)):
+            actor_loss = actor_losses[i] if i < len(actor_losses) and actor_losses[i] is not None else ''
+            critic_loss = critic_losses[i] if i < len(critic_losses) and critic_losses[i] is not None else ''
+            writer.writerow([
+                i+1,
+                f'{episode_rewards[i]:.3f}',
+                waypoints_reached[i],
+                int(shape_completions[i]),
+                f'{actor_loss:.6f}' if actor_loss != '' else '',
+                f'{critic_loss:.6f}' if critic_loss != '' else ''
+            ])
+    
+    print(f"📊 Drawing training data saved to: {csv_path}")
+
+
 def evaluate(env, agent, num_episodes=3):
     """Evaluate agent without exploration noise"""
     total_reward = 0.0
@@ -1296,11 +1543,99 @@ def train_drawing(args):
         os.makedirs(agent.checkpoint_dir, exist_ok=True)
         print(f"   Checkpoint dir: {agent.checkpoint_dir}")
         
+        # ============================================================
+        # LOAD REPLAY BUFFER (same structure as reaching options 2-5)
+        # ============================================================
+        mode_suffix = f"sac_drawing_{mode_str}"
+        load_buffer = input("\n📦 Load existing replay buffer? (y/n): ").strip().lower()
+        if load_buffer == 'y':
+            # Find available buffers for THIS MODE - prioritize BEST over FINAL
+            import glob
+            pkl_dir = os.path.join(os.path.dirname(__file__), 'training_results', 'pkl')
+            os.makedirs(pkl_dir, exist_ok=True)
+            
+            best_buffers = sorted(glob.glob(f"{pkl_dir}/*best*{mode_suffix}*.pkl"), key=os.path.getmtime, reverse=True)
+            final_buffers = sorted(glob.glob(f"{pkl_dir}/*final*{mode_suffix}*.pkl"), key=os.path.getmtime, reverse=True)
+            
+            # Best buffers first, then final buffers
+            buffer_files = best_buffers + final_buffers
+            
+            if buffer_files:
+                print(f"   Found {len(best_buffers)} best buffers, {len(final_buffers)} final buffers")
+                
+                # Show top options
+                if best_buffers:
+                    print(f"   [BEST]  {os.path.basename(best_buffers[0])}")
+                if final_buffers:
+                    print(f"   [FINAL] {os.path.basename(final_buffers[0])}")
+                
+                # Default to best buffer if available, else final
+                default_buffer = best_buffers[0] if best_buffers else final_buffers[0]
+                buffer_path = input(f"   Enter path (Enter = {os.path.basename(default_buffer)}): ").strip()
+                if buffer_path == '':
+                    buffer_path = default_buffer
+                
+                if buffer_path and os.path.exists(buffer_path):
+                    try:
+                        agent.replay_buffer.load(buffer_path)
+                        print(f"   ✅ Loaded replay buffer from: {buffer_path}")
+                        print(f"   Buffer size: {agent.replay_buffer.size()}")
+                    except Exception as e:
+                        print(f"   ❌ Failed to load buffer: {e}")
+                elif buffer_path:
+                    print(f"   ❌ Buffer file not found: {buffer_path}")
+            else:
+                print(f"   No buffer files found for {mode_suffix} in training_results/pkl/")
+        
+        # ============================================================
+        # LOAD PRE-TRAINED MODELS (same structure as reaching options 2-5)
+        # ============================================================
+        checkpoint_dir = agent.checkpoint_dir
+        
+        # Try to load models: best first, then fallback to latest
+        def _latest_file(directory, pattern):
+            import glob
+            files = glob.glob(os.path.join(directory, pattern))
+            return max(files, key=os.path.getmtime) if files else None
+        
+        best_actor_path = os.path.join(checkpoint_dir, 'actor_sac_best.pth')
+        latest_actor_path = _latest_file(checkpoint_dir, 'actor_*_best.pth')
+        if latest_actor_path is None:
+            latest_actor_path = _latest_file(checkpoint_dir, 'actor_*.pth')
+        
+        # Choose best if exists, otherwise latest
+        actor_path = best_actor_path if os.path.exists(best_actor_path) else latest_actor_path
+        
+        if actor_path and os.path.exists(actor_path):
+            try:
+                agent.load_models(actor_path)
+                print(f"\n✅ Loaded pre-trained models from: {checkpoint_dir}")
+                print(f"   Actor: {os.path.basename(actor_path)}")
+                # Show inferred critic paths
+                critic1_path = actor_path.replace('actor_', 'critic1_')
+                if os.path.exists(critic1_path):
+                    print(f"   Critic1: {os.path.basename(critic1_path)}")
+                    print(f"   Critic2: {os.path.basename(actor_path.replace('actor_', 'critic2_'))}")
+            except Exception as e:
+                print(f"\n⚠️ Failed to load models: {e}")
+                print("   Starting with untrained agent")
+        else:
+            print(f"\n📝 No pre-trained models found in {checkpoint_dir}/")
+            print("   Starting with untrained agent")
+        
         # Training loop
         print(f"\n🚀 Starting drawing training ({args.episodes} episodes)...\n")
         
+        # Data tracking for plotting
         episode_rewards = []
         waypoints_completed = []
+        shape_completions = []
+        episode_trajectories = []
+        actor_losses = []
+        critic_losses = []
+        
+        # Get target waypoints for plotting
+        target_waypoints = env.waypoints if hasattr(env, 'waypoints') else None
         
         for episode in range(args.episodes):
             state = env.reset_environment()
@@ -1314,6 +1649,7 @@ def train_drawing(args):
             
             episode_reward = 0.0
             min_distance = float('inf')
+            episode_trajectory = []  # Track EE positions this episode
             
             for step in range(args.max_steps):
                 # Get state info before action (18D state layout)
@@ -1405,6 +1741,9 @@ def train_drawing(args):
                 # Store transition
                 agent.store_transition(state, action, reward, next_state, done)
                 
+                # Track trajectory for plotting
+                episode_trajectory.append(ee_pos_after.copy())
+                
                 episode_reward += reward
                 state = next_state
                 
@@ -1414,11 +1753,21 @@ def train_drawing(args):
             episode_rewards.append(episode_reward)
             wp_reached = info.get('waypoints_reached', 0)
             waypoints_completed.append(wp_reached)
+            shape_complete = info.get('shape_complete', False)
+            shape_completions.append(shape_complete)
+            episode_trajectories.append(episode_trajectory)
             
-            # Train agent
+            # Train agent and track losses
+            ep_actor_loss = None
+            ep_critic_loss = None
             if episode >= 5:
                 for _ in range(20):
-                    agent.train()
+                    losses = agent.train()
+                    if losses and len(losses) >= 2:
+                        ep_actor_loss = losses[0]
+                        ep_critic_loss = losses[1]
+            actor_losses.append(ep_actor_loss)
+            critic_losses.append(ep_critic_loss)
             
             # Log
             shape_complete = info.get('shape_complete', False)
@@ -1436,6 +1785,44 @@ def train_drawing(args):
         print("="*70)
         
         agent.save_models()
+        
+        # Save replay buffer for future training (same location as reaching)
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        pkl_dir = os.path.join(os.path.dirname(__file__), 'training_results', 'pkl')
+        os.makedirs(pkl_dir, exist_ok=True)
+        
+        # Save both "best" and "final" buffers
+        buffer_base = f"replay_buffer_best_{mode_suffix}_{timestamp}.pkl"
+        buffer_path = os.path.join(pkl_dir, buffer_base)
+        try:
+            agent.replay_buffer.save(buffer_path)
+            print(f"💾 Saved replay buffer: {buffer_path}")
+            print(f"   Buffer size: {agent.replay_buffer.size()} transitions")
+        except Exception as e:
+            print(f"⚠️ Failed to save buffer: {e}")
+        
+        # Plot training statistics
+        plot_suffix = f"sac_drawing_{mode_str}"
+        plot_drawing_stats(
+            episode_rewards=episode_rewards,
+            waypoints_reached=waypoints_completed,
+            shape_completions=shape_completions,
+            actor_losses=actor_losses,
+            critic_losses=critic_losses,
+            episode_trajectories=episode_trajectories,
+            target_waypoints=target_waypoints,
+            mode_suffix=plot_suffix
+        )
+        
+        # Final cleanup - mode-specific, keep only best and final buffers
+        # Clean only THIS mode's buffers (same as reaching options 2-5)
+        cleanup_old_files(pkl_dir, f"replay_buffer_ep*{mode_suffix}*.pkl", 4)  # Keep 4 periodic
+        cleanup_old_files(pkl_dir, f"replay_buffer_best*{mode_suffix}*.pkl", 1)  # Keep only 1 best
+        cleanup_old_files(pkl_dir, f"replay_buffer_final*{mode_suffix}*.pkl", 1)  # Keep only 1 final
+        print(f"🧹 Cleaned up old {mode_suffix} buffer files")
+        
+        print(f"\n✅ Drawing training complete! Trained for {args.episodes} episodes.")
         
     except KeyboardInterrupt:
         print("\n⚠️ Training interrupted")

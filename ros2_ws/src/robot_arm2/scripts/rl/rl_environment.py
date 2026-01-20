@@ -74,14 +74,14 @@ SURFACE_Z_MAX = 0.28   # 28cm  → 12cm height (Z)
 TARGET_RADIUS = 0.0075  # 0.75cm radius (tighter threshold)
 
 # Workspace boundaries for target spawning (with 1cm margin from borders)
-# This ensures the 1cm radius target sphere stays fully within the workspace
+# This ensures the target sphere stays fully within the workspace
 WORKSPACE_BOUNDS = {
-    'x_min': SURFACE_X_MIN + TARGET_RADIUS,  # -23cm
-    'x_max': SURFACE_X_MAX - TARGET_RADIUS,  # +23cm
-    'y_min': SURFACE_Y_MIN + TARGET_RADIUS,  # -34cm
-    'y_max': SURFACE_Y_MAX - TARGET_RADIUS,  # -6cm
-    'z_min': SURFACE_Z_MIN + TARGET_RADIUS,  # 9cm
-    'z_max': SURFACE_Z_MAX - TARGET_RADIUS   # 39cm
+    'x_min': SURFACE_X_MIN + TARGET_RADIUS,  # -5.25cm
+    'x_max': SURFACE_X_MAX - TARGET_RADIUS,  # +5.25cm
+    'y_min': SURFACE_Y_MIN + TARGET_RADIUS,  # +15.75cm (+Y workspace)
+    'y_max': SURFACE_Y_MAX - TARGET_RADIUS,  # +29.25cm (+Y workspace)
+    'z_min': SURFACE_Z_MIN + TARGET_RADIUS,  # 16.75cm
+    'z_max': SURFACE_Z_MAX - TARGET_RADIUS   # 27.25cm
 }
 
 

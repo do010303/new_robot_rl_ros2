@@ -241,27 +241,37 @@ class DrawingEnvironment(RLEnvironment):
         return next_state, reward, done, info
     
     def _calculate_drawing_reward(self, dist_after: float, dist_before: float) -> Tuple[float, bool]:
-        """Calculate reward with waypoint advancement."""
+        """
+        Calculate reward with waypoint advancement.
+        
+        Uses SPARSE REWARD (same as reaching) per waypoint:
+        - 0 when waypoint reached (success)
+        - -1 when still trying (failure)
+        
+        This matches the successful reaching training reward structure.
+        HER will help learn each waypoint efficiently.
+        """
         done = False
         
+        # Check if current waypoint is reached
         if dist_after < self.waypoint_tolerance:
             self.waypoints_reached += 1
             self.waypoint_index += 1
             
             if self.waypoint_index >= self.total_waypoints:
-                reward = 50.0
+                # All waypoints reached - shape complete!
+                reward = 0.0  # Sparse success
                 done = True
-                self.get_logger().info(f"🎨 SHAPE COMPLETE!")
+                self.get_logger().info(f"🎨 SHAPE COMPLETE! ({self.total_waypoints} waypoints)")
             else:
-                reward = 5.0
+                # Waypoint reached, advance to next
+                reward = 0.0  # Sparse success for this waypoint
                 next_wp = self.waypoints[self.waypoint_index]
                 self.target_x, self.target_y, self.target_z = next_wp
                 self.get_logger().info(f"✓ Waypoint {self.waypoint_index}/{self.total_waypoints}")
         else:
-            improvement = dist_before - dist_after
-            dist_reward = -5.0 * dist_after
-            improve_reward = 5.0 * improvement if improvement >= 0 else 10.0 * improvement
-            reward = np.clip(dist_reward + improve_reward - 0.1, -10.0, 10.0)
+            # Still trying to reach current waypoint
+            reward = -1.0  # Sparse failure
         
         return reward, done
 
