@@ -19,7 +19,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from rl.rl_environment import RLEnvironment
-from agents.td3_agent import TD3Agent
+from rl.drawing_environment import DrawingEnvironment  # Import Drawing Environment
+# from agents.td3_agent import TD3Agent
 from agents.sac_agent import SACAgentGazebo
 from utils.her import her_augmentation
 from rl.neural_ik import NeuralIK
@@ -29,6 +30,8 @@ import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend
 import matplotlib.pyplot as plt
 
+from drawing.drawing_config import SHAPE_TYPE, SHAPE_SIZE, Y_PLANE
+
 
 # ============================================================================
 # TRAINING HYPERPARAMETERS
@@ -36,7 +39,7 @@ import matplotlib.pyplot as plt
 
 # Episode settings
 NUM_EPISODES = 1000
-MAX_STEPS_PER_EPISODE = 10
+MAX_STEPS_PER_EPISODE = 100 # Increased for drawing multiple waypoints (was 10)
 LEARNING_STARTS = 10  # Start training after this many episodes
 
 # Training settings 
@@ -56,7 +59,6 @@ GOAL_THRESHOLD = 0.0075  # 0.75cm threshold for success (tighter)
 SUCCESS_REWARD = 0.0   # Sparse: 0 for success
 STEP_PENALTY = -1.0    # Sparse: -1 for failure
 
-# TD3/SAC hyperparameters (GitHub style - higher LRs)
 ACTOR_LR = 0.001       # GitHub: 0.001 (was 3e-4)
 CRITIC_LR = 0.002      # GitHub: 0.002 (was 1e-4)
 GAMMA = 0.99
@@ -130,7 +132,7 @@ def _latest_file(directory: str, pattern: str):
 def train(args):
     """Main training function"""
     print("="*70)
-    print("TD3+HER Training for 6-DOF Robot Arm")
+    print("SAC+HER Training for 6-DOF Robot Arm")
     print("="*70)
     
     env = None  # Initialize env to prevent unbound error in finally block
@@ -141,12 +143,20 @@ def train(args):
         rclpy.init()
         ros_initialized = True
         
-        # Create environment
-        print("\n📦 Creating RL environment...")
-        env = RLEnvironment(
+        # Create environment (SWITCHED TO DRAWING ENVIRONMENT)
+        print("\n📦 Creating RL environment (Drawing Mode)...")
+        print(f"   Shape: {SHAPE_TYPE}, Size: {SHAPE_SIZE}, Steps: {args.max_steps}")
+        env = DrawingEnvironment(
             max_episode_steps=args.max_steps,
-            goal_tolerance=GOAL_THRESHOLD
+            waypoint_tolerance=GOAL_THRESHOLD,
+            shape_type=SHAPE_TYPE,
+            shape_size=SHAPE_SIZE,
+            y_plane=Y_PLANE
         )
+        # env = RLEnvironment(
+        #     max_episode_steps=args.max_steps,
+        #     goal_tolerance=GOAL_THRESHOLD
+        # )
         
         # Wait for environment to initialize
         print("   Waiting for environment...")
@@ -197,26 +207,7 @@ def train(args):
         # else:
         #     args.pid_controller = None
         
-        if args.agent == 'td3':
-            agent = TD3Agent(
-                state_dim=16,  # 16D observation
-                action_dim=action_dim,
-                max_action=max_action,
-                min_action=min_action,
-                actor_lr=ACTOR_LR,
-                critic_lr=CRITIC_LR,
-                gamma=GAMMA,
-                tau=TAU,
-                batch_size=BATCH_SIZE,
-                buffer_size=BUFFER_SIZE
-            )
-            mode_str = "Neural IK 3D" if use_neural_ik else "Direct 6D"
-            print(f"TD3 Agent initialized ({mode_str} Control):")
-            print(f"  State dim: 16, Action dim: {action_dim}")
-            print(f"  Device: {agent.device}")
-            print(f"  Buffer size: {BUFFER_SIZE}, Batch size: {BATCH_SIZE}")
-        
-        elif args.agent == 'sac':
+        if args.agent == 'sac':
             agent = SACAgentGazebo(
                 state_dim=16,  # 16D observation
                 n_actions=action_dim,
@@ -235,7 +226,8 @@ def train(args):
             print(f"  State dim: 16, Action dim: {action_dim}")
         
         else:
-            raise ValueError(f"Unknown agent: {args.agent}. Choose 'td3' or 'sac'")
+             # Fallback or error if somehow another agent is passed (though parser restricts it)
+             raise ValueError(f"Unknown agent: {args.agent}. Only 'sac' is supported.")
         
         # Override agent's checkpoint directory to be mode-specific
         # This ensures 3D (neural_ik) and 6D (direct) models are saved separately
@@ -680,7 +672,7 @@ def train(args):
                 print(f"   Average Critic Loss: {np.mean(valid_critic_losses):.4f}")
         
         # Plot training statistics (with distance data)
-        # Create mode suffix for filenames (e.g., 'sac_neuralIK' or 'td3_direct')
+        # Create mode suffix for filenames (e.g., 'sac_neuralIK')
         mode_suffix = f"{args.agent}{'_neuralIK' if use_neural_ik else '_direct'}"
         plot_training_stats(episode_rewards, episode_successes, episode_min_distances, 
                            actor_losses, critic_losses, png_dir, csv_dir, timestamp, mode_suffix, episode_steps)
@@ -1171,6 +1163,7 @@ def manual_control_mode():
     print("=" * 70)
     print("Commands:")
     print("  Enter 6 joint angles in DEGREES: e.g., '0 0 45 0 0 0'")
+    print("  (Paste from filtered_step_log.txt 'CMD' line)")
     print("  'home' or 'h' - Move to home position (0,0,0,0,0,0)")
     print("  'up' - Move arm up (0,45,45,0,0,0)")
     print("  'forward' - Extend forward (0,30,60,0,-30,0)")
@@ -1190,6 +1183,8 @@ def manual_control_mode():
         
         # Create environment
         print("\n📦 Creating environment...")
+        
+        # Use RLEnvironment but logging implies we want to verify drawing consistency
         env = RLEnvironment(max_episode_steps=100, goal_tolerance=0.01)
         
         # Wait for initialization
@@ -1227,7 +1222,7 @@ def manual_control_mode():
                     print(f"\n📍 Current joints (deg): [{current_joints_deg[0]:.1f}, {current_joints_deg[1]:.1f}, "
                           f"{current_joints_deg[2]:.1f}, {current_joints_deg[3]:.1f}, {current_joints_deg[4]:.1f}, "
                           f"{current_joints_deg[5]:.1f}]")
-                    print(f"📍 EE position: ({ee_pos[0]:.3f}, {ee_pos[1]:.3f}, {ee_pos[2]:.3f})")
+                    print(f"📍 Current EE (Actual): ({ee_pos[0]:.4f}, {ee_pos[1]:.4f}, {ee_pos[2]:.4f})")
                 
                 cmd = input("\n🤖 Enter command: ").strip().lower()
                 
@@ -1267,7 +1262,7 @@ def manual_control_mode():
                 elif cmd == 'fk':
                     if state is not None:
                         fk_pos = fk(current_joints_rad)
-                        print(f"📊 FK Position: ({fk_pos[0]:.4f}, {fk_pos[1]:.4f}, {fk_pos[2]:.4f})")
+                        print(f"📊 Calculated FK: ({fk_pos[0]:.4f}, {fk_pos[1]:.4f}, {fk_pos[2]:.4f})")
                     continue
                 
                 else:
@@ -1282,14 +1277,22 @@ def manual_control_mode():
                         print("❌ Invalid input. Enter 6 numbers or a command.")
                         continue
                 
-                # Convert to radians and clip to limits
+                # Convert to radians
                 joints_rad = np.radians(joints_deg)
-                joints_rad = np.clip(joints_rad, -np.pi/2, np.pi/2)
                 
-                # Show target FK
+                # Check for clipping (warn user)
+                clipped_rad = np.clip(joints_rad, -np.pi/2, np.pi/2)
+                if not np.allclose(joints_rad, clipped_rad):
+                    print(f"⚠️  WARNING: Input angles clipped to ±90° limits!")
+                    print(f"   Input (deg): {joints_deg}")
+                    print(f"   Clipped (deg): {np.degrees(clipped_rad)}")
+                
+                joints_rad = clipped_rad
+                
+                # Show EXPECTED FK vs CURRENT
                 try:
                     target_fk = fk(joints_rad)
-                    print(f"🎯 Target FK: ({target_fk[0]:.4f}, {target_fk[1]:.4f}, {target_fk[2]:.4f})")
+                    print(f"🎯 Expected Target FK: ({target_fk[0]:.4f}, {target_fk[1]:.4f}, {target_fk[2]:.4f})")
                 except Exception as e:
                     print(f"⚠️ FK error: {e}")
                 
@@ -1297,9 +1300,19 @@ def manual_control_mode():
                 print(f"🚀 Moving to: {[f'{d:.1f}°' for d in joints_deg]}")
                 next_state, reward, done, info = env.step(joints_rad)
                 
-                # Spin to process
-                for _ in range(10):
+                # Wait for settling (Longer wait for manual verification)
+                print("⏳ Settling...")
+                for _ in range(20): # 2.0 seconds
                     rclpy.spin_once(env, timeout_sec=0.1)
+                
+                # Show RESULTING state
+                if next_state is not None:
+                     final_ee = next_state[6:9]
+                     dist_err = np.linalg.norm(final_ee - target_fk)
+                     print(f"📍 Resulting EE:     ({final_ee[0]:.4f}, {final_ee[1]:.4f}, {final_ee[2]:.4f})")
+                     print(f"📏 Error (FK vs Res): {dist_err*100:.2f} cm")
+                     if dist_err > 0.02:
+                         print("⚠️  Large discrepancy! Check physics/collisions/limits.")
                 
                 time.sleep(0.5)
                 
@@ -1345,21 +1358,15 @@ def show_menu():
     print("\n" + "="*70)
     print("🎮 TRAINING MENU")
     print("="*70)
-    print("1. Manual Test Mode")
-    print("2. RL Training Mode (TD3) - 6D Direct Joint Control")
-    print("3. RL Training Mode (SAC) - 6D Direct Joint Control")
-    print("-"*70)
-    print("4. RL Training Mode (TD3 + Neural IK) - 3D Position Control ⚡")
-    print("5. RL Training Mode (SAC + Neural IK) - 3D Position Control ⚡")
-    print("-"*70)
-    print("6. Train Neural IK Model (run first for options 4-5)")
-    print("-"*70)
-    print("🖋️  DRAWING TRAINING (30 waypoints, continuous trajectory)")
-    print("7. Drawing Training (SAC) - 6D Direct")
-    print("8. Drawing Training (SAC + Neural IK) - 3D Position ⚡")
+    print("1. 🎮 Manual Test Mode (Verify environment)")
+    print("2. 🤖 SAC Training (6-DOF Direct Control)")
+    print("3. 🧠 SAC Training + Neural IK (3D Position Control)")
+    print("4. 🧠 Train Neural IK Model")
+    print("5. 🖋️ Drawing Task Training (SAC 6D Direct)")
+    print("6. 🖋️ Drawing Task Training (SAC + Neural IK)")
     print("="*70)
     
-    choice = input("Select option (1-8): ").strip()
+    choice = input("Select option (1-6): ").strip()
     return choice
 
 
@@ -1388,10 +1395,14 @@ def get_drawing_params():
     """Get drawing training parameters interactively"""
     print("\n🖋️ Drawing Training Configuration")
     print("="*70)
-    print("  Triangle: 30 waypoints (10 per edge)")
+    
+    # Import config values for display
+    from drawing.drawing_config import SHAPE_TYPE, TOTAL_WAYPOINTS, POINTS_PER_EDGE
+    
+    print(f"  Shape: {SHAPE_TYPE} ({TOTAL_WAYPOINTS} waypoints, {POINTS_PER_EDGE} per edge)")
     print("  Each step = 1 attempt to reach current waypoint")
     print("  When waypoint reached → next waypoint becomes target")
-    print("  Episode ends: all 30 reached OR max steps exceeded")
+    print("  Episode ends: all waypoints reached OR max steps exceeded")
     print("-"*70)
     print("  State: 18D = 6 joints + 3 EE + 3 target + 3 dist + 3 other")
     print("="*70)
@@ -1408,7 +1419,7 @@ def get_drawing_params():
     
     print(f"\n✅ Drawing Configuration:")
     print(f"   Episodes: {episodes}")
-    print(f"   Max steps: {max_steps} (3 waypoints, min 5 steps)")
+    print(f"   Max steps: {max_steps} ({TOTAL_WAYPOINTS} waypoints, min 5 steps)")
     print(f"   State dim: 18")
     print("="*70)
     
@@ -1418,10 +1429,13 @@ def get_drawing_params():
 def train_drawing(args):
     """
     Training loop for drawing task using DrawingEnvironment.
-    Uses dense_triangle with 30 waypoints for continuous trajectory.
     """
+
+    # Import config values
+    from drawing.drawing_config import SHAPE_TYPE
+    
     print("="*70)
-    print("🖋️ Drawing Training - Continuous Triangle Trajectory")
+    print(f"🖋️ Drawing Training - {SHAPE_TYPE.capitalize()} Trajectory")
     print("="*70)
     
     env = None
@@ -1848,8 +1862,8 @@ def train_drawing(args):
 def main():
     """Main entry point with interactive menu"""
     parser = argparse.ArgumentParser(description='Train RL agent for 6-DOF robot arm')
-    parser.add_argument('--agent', type=str, default=None, choices=['td3', 'sac'],
-                        help='RL agent to use: td3 or sac (skips menu if provided)')
+    parser.add_argument('--agent', type=str, default=None, choices=['sac'],
+                        help='RL agent to use: sac (skips menu if provided)')
     parser.add_argument('--episodes', type=int, default=None,
                         help=f'Number of training episodes (default: {NUM_EPISODES})')
     parser.add_argument('--max-steps', type=int, default=None,
@@ -1884,7 +1898,7 @@ def main():
         manual_control_mode()
         return  # Exit after manual mode
     elif choice == '2':
-        args.agent = 'td3'
+        args.agent = 'sac'
         # Get training parameters interactively
         episodes, max_steps = get_training_params()
         args.episodes = episodes
@@ -1892,28 +1906,13 @@ def main():
         train(args)
     elif choice == '3':
         args.agent = 'sac'
+        args.use_neural_ik = True
         # Get training parameters interactively
         episodes, max_steps = get_training_params()
         args.episodes = episodes
         args.max_steps = max_steps
         train(args)
     elif choice == '4':
-        args.agent = 'td3'
-        args.use_neural_ik = True
-        # Get training parameters interactively
-        episodes, max_steps = get_training_params()
-        args.episodes = episodes
-        args.max_steps = max_steps
-        train(args)
-    elif choice == '5':
-        args.agent = 'sac'
-        args.use_neural_ik = True
-        # Get training parameters interactively
-        episodes, max_steps = get_training_params()
-        args.episodes = episodes
-        args.max_steps = max_steps
-        train(args)
-    elif choice == '6':
         # Train Neural IK model
         print("\n" + "="*70)
         print("🧠 Training Neural IK Model")
@@ -1937,7 +1936,7 @@ def main():
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         nik.save(save_path)
         print("\n✅ Neural IK training complete! Now you can use options 4 or 5.")
-    elif choice == '7':
+    elif choice == '5':
         # Drawing Training (SAC) - 6D Direct
         print("\n🖋️ Drawing Training (SAC 6D Direct)")
         args.agent = 'sac'
@@ -1947,7 +1946,7 @@ def main():
         args.episodes = episodes
         args.max_steps = max_steps
         train_drawing(args)
-    elif choice == '8':
+    elif choice == '6':
         # Drawing Training (SAC + Neural IK) - 3D Position
         print("\n🖋️ Drawing Training (SAC + Neural IK 3D)")
         args.agent = 'sac'

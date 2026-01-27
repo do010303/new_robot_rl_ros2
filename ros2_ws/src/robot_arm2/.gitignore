@@ -10,7 +10,7 @@ build/
 
 # Training checkpoints (but keep results for analysis)
 # scripts/training_results/
-scripts/checkpoints/
+# scripts/checkpoints/
 scripts/rl/backup/
 reference/
 
