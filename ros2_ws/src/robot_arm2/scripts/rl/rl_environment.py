@@ -39,49 +39,28 @@ except ImportError:
 
 
 # ============================================================================
-# WORKSPACE CONFIGURATION - 3D Workspace for Target Randomization
+# WORKSPACE CONFIGURATION
 # ============================================================================
 
-# 3D workspace parameters (based on detailed FK analysis - 50,000 samples)
-# Robot is at origin, targets are in FRONT of robot (-Y direction)
-#
-# From FK exploration (5-95 percentile for safety):
-#   Reachable X: [-0.24, +0.24] → using ±24cm (symmetric)
-#   Reachable Y: [-0.25, +0.22] → using -35cm to -5cm (only forward, extended)
-#   Reachable Z: [0.06, 0.42] → using 8-40cm (avoid ground, safe ceiling)
-#
-# Key positions:
-#   Home: X=-0.003, Y=-0.022, Z=0.488 (high above)
-#   J2=45°: Y=-0.28 (forward reach)
-#   J2=90°: Y=-0.39 (max forward, low Z)
-#
-# Note: Robot faces -Y direction (toward drawing surface)
-
-# NARROWED WORKSPACE (12x15x12 cm) - for focused learning
-# Phase 1: Start very small, expand later for curriculum learning
-# SWITCHED TO +Y AXIS (robot reaches forward)
-# Original -Y workspace commented out:
-#   SURFACE_Y_MIN = -0.30, SURFACE_Y_MAX = -0.15
-
+# Workspace bounds (12x15x12 cm cube in front of robot)
 SURFACE_X_MIN = -0.06  # -6cm
-SURFACE_X_MAX = 0.06   # +6cm  → 12cm width (X)
-SURFACE_Y_MIN = 0.15   # +15cm (was -30cm)
-SURFACE_Y_MAX = 0.30   # +30cm (was -15cm) → 15cm depth (Y)
+SURFACE_X_MAX = 0.06   # +6cm
+SURFACE_Y_MIN = 0.15   # +15cm
+SURFACE_Y_MAX = 0.30   # +30cm
 SURFACE_Z_MIN = 0.16   # 16cm
-SURFACE_Z_MAX = 0.28   # 28cm  → 12cm height (Z)
+SURFACE_Z_MAX = 0.28   # 28cm
 
-# Target sphere radius (for border margin calculation)
-TARGET_RADIUS = 0.0075  # 0.75cm radius (tighter threshold)
+# Target sphere radius for collision detection
+TARGET_RADIUS = 0.01  # 1cm
 
-# Workspace boundaries for target spawning (with 1cm margin from borders)
-# This ensures the target sphere stays fully within the workspace
+# Workspace boundaries with margin for target spawning
 WORKSPACE_BOUNDS = {
-    'x_min': SURFACE_X_MIN + TARGET_RADIUS,  # -5.25cm
-    'x_max': SURFACE_X_MAX - TARGET_RADIUS,  # +5.25cm
-    'y_min': SURFACE_Y_MIN + TARGET_RADIUS,  # +15.75cm (+Y workspace)
-    'y_max': SURFACE_Y_MAX - TARGET_RADIUS,  # +29.25cm (+Y workspace)
-    'z_min': SURFACE_Z_MIN + TARGET_RADIUS,  # 16.75cm
-    'z_max': SURFACE_Z_MAX - TARGET_RADIUS   # 27.25cm
+    'x_min': SURFACE_X_MIN + TARGET_RADIUS,
+    'x_max': SURFACE_X_MAX - TARGET_RADIUS,
+    'y_min': SURFACE_Y_MIN + TARGET_RADIUS,
+    'y_max': SURFACE_Y_MAX - TARGET_RADIUS,
+    'z_min': SURFACE_Z_MIN + TARGET_RADIUS,
+    'z_max': SURFACE_Z_MAX - TARGET_RADIUS
 }
 
 
@@ -139,19 +118,15 @@ class RLEnvironment(Node):
         # IK success tracking (legacy, not used with direct joint control)
         self.last_ik_success = 1.0
         
-        # RL Spaces (Gym-compatible)
-        # ACTION SPACE: 6D ABSOLUTE joint angles (radians) - Direct joint control!
-        # Agent outputs target joint positions, constrained by joint limits ±90°
-        # This allows the robot to move freely to any configuration in 1 step
+        # Action space: 6D absolute joint angles (radians)
         self.action_space = spaces.Box(
-            low=self.joint_limits_low,   # -π/2 for all joints
-            high=self.joint_limits_high,  # +π/2 for all joints
+            low=self.joint_limits_low,
+            high=self.joint_limits_high,
             dtype=np.float32
         )
         
-        # OBSERVATION SPACE: 16D state for 6-DOF direct joint control
+        # Observation space: 16D state
         # [joints(6), robot_xyz(3), target_xyz(3), dist_xyz(3), dist_3d(1)]
-        # NOTE: key_velocities removed - not useful for learning
         self.observation_space = spaces.Box(
             low=np.array([
                 -np.pi/2, -np.pi/2, -np.pi/2, -np.pi/2, -np.pi/2, -np.pi/2,  # joint limits min
@@ -337,21 +312,7 @@ class RLEnvironment(Node):
     # This node uses Ignition Transport to spawn and teleport the visual sphere
     
     def get_state(self) -> Optional[np.ndarray]:
-        """
-        Get current environment state for RL agent
-        
-        State vector for 6-DOF robot (23 elements):
-        - Joint positions (6): [joint1, ..., joint6]
-        - End-effector position (3): [robot_x, robot_y, robot_z]
-        - Target position (3): [target_x, target_y, target_z]
-        - Distance to target (3): [dist_x, dist_y, dist_z]
-        - Euclidean distance (1): [dist_3d]
-        - IK success flag (1): [ik_success]
-        - Joint velocities (6): [vel1, ..., vel6]
-        
-        Returns:
-            numpy array of state (23D) or None if not ready
-        """
+        """Get current 16D state vector for RL agent."""
         if not self.data_ready:
             return None
         
@@ -508,40 +469,15 @@ class RLEnvironment(Node):
         return next_state, reward, done, info
     
     def _calculate_reward(self, dist_after: float, dist_before: float) -> Tuple[float, bool]:
-        """
-        Calculate reward based on distance to goal
-        
-        IMPROVED Reward Structure (Combined Reference + Neural IK considerations):
-        
-        ACTIVE Components:
-        - Goal reached (dist < 1cm): +100.0, episode done (strong success signal)
-        - Distance penalty: -dist_after (linear, consistent gradient)
-        - Improvement bonus: +5.0 * improvement (reward getting closer)
-        - Step penalty: -0.01 (small, doesn't block exploration)
-        - Clipped to [-50, +50] (wider range so success stands out)
-        
-        FUTURE Components (for Neural IK smoothness - uncomment when needed):
-        - Action smoothness: -0.05 * ||action||² (prevent wild movements)
-        - Joint stability: -0.02 * ||Δjoints||² (prevent elbow flips)
-        
-        Args:
-            dist_after: Distance to goal after action
-            dist_before: Distance to goal before action
-        
-        Returns:
-            Tuple of (reward, done)
-        """
+        """Calculate sparse reward: 0 for success, -1 for failure."""
         done = False
         
-        # ===== SPARSE REWARD (GitHub style) =====
-        # 0 for success, -1 for failure
-        # Let HER do the heavy lifting
-        if dist_after < self.goal_tolerance:  # 0.01m = 1cm
-            reward = 0.0   # Success (sparse)
+        if dist_after < self.goal_tolerance:
+            reward = 0.0
             done = True
             self.get_logger().info(f"🎯 Goal reached! Distance: {dist_after*1000:.1f}mm")
         else:
-            reward = -1.0  # Failure (sparse)
+            reward = -1.0
         
         return reward, done
     

@@ -39,33 +39,33 @@ from drawing.drawing_config import SHAPE_TYPE, SHAPE_SIZE, Y_PLANE
 
 # Episode settings
 NUM_EPISODES = 1000
-MAX_STEPS_PER_EPISODE = 100 # Increased for drawing multiple waypoints (was 10)
-LEARNING_STARTS = 10  # Start training after this many episodes
+MAX_STEPS_PER_EPISODE = 100
+LEARNING_STARTS = 10
 
 # Training settings 
-OPT_STEPS_PER_EPISODE = 64  # GitHub: 64 gradient updates per episode
-SAVE_INTERVAL = 25  # Save models every N episodes
-EVAL_INTERVAL = 10  # Evaluate (without noise) every N episodes
-MIN_EPISODES = 25  # Minimum episodes before allowing 'best' model save
+OPT_STEPS_PER_EPISODE = 64
+SAVE_INTERVAL = 25
+EVAL_INTERVAL = 10
+MIN_EPISODES = 25
 
-# HER settings
+# HER (Hindsight Experience Replay) settings
 HER_ENABLED = True
-HER_K = 4  # Number of HER samples per timestep
-HER_STRATEGY = 'future'  # 'future' or 'final'
+HER_K = 4
+HER_STRATEGY = 'future'
 
-# Reward settings (SPARSE like GitHub project)
-# 0 for success, -1 for failure - let HER do the work
-GOAL_THRESHOLD = 0.0075  # 0.75cm threshold for success (tighter)
-SUCCESS_REWARD = 0.0   # Sparse: 0 for success
-STEP_PENALTY = -1.0    # Sparse: -1 for failure
+# Reward settings (sparse)
+GOAL_THRESHOLD = 0.0075  # 0.75cm
+SUCCESS_REWARD = 0.0
+STEP_PENALTY = -1.0
 
-ACTOR_LR = 0.001       # GitHub: 0.001 (was 3e-4)
-CRITIC_LR = 0.002      # GitHub: 0.002 (was 1e-4)
+# Learning hyperparameters
+ACTOR_LR = 0.001
+CRITIC_LR = 0.002
 GAMMA = 0.99
 TAU = 0.005
 BATCH_SIZE = 256
 BUFFER_SIZE = int(1e6)
-BATCH_OPT_STEPS = 64   # GitHub: 64 optimization steps per episode
+BATCH_OPT_STEPS = 64
 
 # Auto-cleanup settings
 MAX_BUFFER_FILES = 3      # Keep only N most recent buffer files (per type)
@@ -197,15 +197,7 @@ def train(args):
         
         # Store neural_ik in args for training loop access
         args.neural_ik = neural_ik
-        
-        # PID Controller DISABLED - caused worse results (4.5% vs 26% success rate)
-        # The PID was making the pen swing horizontally instead of reaching target
         args.pid_controller = None
-        # if use_neural_ik:
-        #     args.pid_controller = PIDController(Kp=2.0, Ki=0.0, Kd=0.1)
-        #     print(f"   ✅ PID Controller enabled for Residual RL (Kp=2.0, Kd=0.1)")
-        # else:
-        #     args.pid_controller = None
         
         if args.agent == 'sac':
             agent = SACAgentGazebo(
