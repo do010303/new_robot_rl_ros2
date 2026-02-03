@@ -35,3 +35,6 @@ Thumbs.db
 # Training outputs (large files)
 ros2_ws/src/robot_arm2/scripts/training_results/
 ros2_ws/src/robot_arm2/scripts/checkpoints/
+
+# Exception: Keep trained Neural IK model
+!ros2_ws/src/robot_arm2/scripts/checkpoints/neural_ik.pth
