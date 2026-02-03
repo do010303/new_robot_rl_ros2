@@ -143,20 +143,13 @@ def train(args):
         rclpy.init()
         ros_initialized = True
         
-        # Create environment (SWITCHED TO DRAWING ENVIRONMENT)
-        print("\n📦 Creating RL environment (Drawing Mode)...")
-        print(f"   Shape: {SHAPE_TYPE}, Size: {SHAPE_SIZE}, Steps: {args.max_steps}")
-        env = DrawingEnvironment(
+        # Create environment (RLEnvironment for reaching task)
+        print("\n📦 Creating RL environment (Reaching Mode)...")
+        print(f"   Max steps: {args.max_steps}")
+        env = RLEnvironment(
             max_episode_steps=args.max_steps,
-            waypoint_tolerance=GOAL_THRESHOLD,
-            shape_type=SHAPE_TYPE,
-            shape_size=SHAPE_SIZE,
-            y_plane=Y_PLANE
+            goal_tolerance=GOAL_THRESHOLD
         )
-        # env = RLEnvironment(
-        #     max_episode_steps=args.max_steps,
-        #     goal_tolerance=GOAL_THRESHOLD
-        # )
         
         # Wait for environment to initialize
         print("   Waiting for environment...")
