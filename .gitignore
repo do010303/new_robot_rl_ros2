@@ -50,3 +50,4 @@ ref/buffer best/
 # === Gemini agent artifacts ===
 .gemini/
 *.log
+ref/
