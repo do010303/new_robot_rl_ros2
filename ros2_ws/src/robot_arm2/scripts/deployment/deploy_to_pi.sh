@@ -6,9 +6,9 @@ echo "🚀 Deploying RL Model to Raspberry Pi (ROS2)"
 echo "========================================================================"
 
 # Configuration
-PI_USER="pi"
-DEFAULT_PI_IP="192.168.1.100"
-PI_RL_DIR="/home/pi/rl_deployment"
+PI_USER="piros2"
+DEFAULT_PI_IP="192.168.50.1"
+PI_RL_DIR="/home/piros2/rl_deployment"
 
 # Prompt for IP address
 read -p "Enter Raspberry Pi IP address [${DEFAULT_PI_IP}]: " PI_HOST
@@ -19,41 +19,29 @@ PI_HOST=${PI_HOST:-$DEFAULT_PI_IP}
 # Script is usually run from ros2_ws/src/robot_arm2/scripts/deployment or ros2_ws/
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(cd "${SCRIPT_DIR}/../../../../.." && pwd)"
-CHECKPOINT_DIR="${WORKSPACE_DIR}/ros2_ws/src/robot_arm2/scripts/checkpoints/sac_gazebo"
-TFLITE_MODEL="${CHECKPOINT_DIR}/actor_sac_best_quantized.tflite"
+CHECKPOINT_DIR="${WORKSPACE_DIR}/ros2_ws/src/robot_arm2/scripts/deployment/onnx_models"
+ONNX_ACTOR="${CHECKPOINT_DIR}/actor_drawing_quant.onnx"
+ONNX_NIK="${CHECKPOINT_DIR}/neural_ik_quant.onnx"
 
 echo ""
 echo "📋 Deployment Configuration:"
 echo "   Target: ${PI_USER}@${PI_HOST}"
 echo "   RL Directory: ${PI_RL_DIR}"
-echo "   Model: ${TFLITE_MODEL}"
+echo "   Model: ${ONNX_ACTOR}"
 echo ""
 
-# Check if TFLite model exists
-if [ ! -f "${TFLITE_MODEL}" ]; then
-    # Try alternate path if running from different location
-    if [ -f "actor_sac_best_quantized.tflite" ]; then
-         TFLITE_MODEL="actor_sac_best_quantized.tflite"
-    elif [ -f "../checkpoints/sac_gazebo/actor_sac_best_quantized.tflite" ]; then
-         TFLITE_MODEL="../checkpoints/sac_gazebo/actor_sac_best_quantized.tflite"
-    else
-        echo "❌ ERROR: TFLite model not found at ${TFLITE_MODEL}"
-        echo ""
-        echo "📝 Please export your trained model first:"
-        echo "   1. Create virtualenv for conversion tool:"
-        echo "      python3 -m venv /tmp/tflite_env"
-        echo "      /tmp/tflite_env/bin/pip install tensorflow onnx==1.12.0 onnx-tf"
-        echo ""
-        echo "   2. Run conversion:"
-        echo "      cd ${SCRIPT_DIR}"
-        echo "      python3 pytorch_to_onnx.py --model ../checkpoints/sac_gazebo/actor_sac_best.pth"
-        echo "      /tmp/tflite_env/bin/python3 onnx_to_tflite.py --model ../checkpoints/sac_gazebo/actor_sac_best.onnx --quantize"
-        echo ""
-        exit 1
-    fi
+# Check if ONNX model exists
+if [ ! -f "${ONNX_ACTOR}" ]; then
+    echo "❌ ERROR: ONNX model not found at ${ONNX_ACTOR}"
+    echo ""
+    echo "📝 Please export your trained model first:"
+    echo "   cd ros2_ws/src/robot_arm2/scripts/deployment"
+    echo "   python3 export_onnx_quantized.py"
+    echo ""
+    exit 1
 fi
 
-echo "✅ TFLite model found ($(du -h ${TFLITE_MODEL} | cut -f1))"
+echo "✅ ONNX model found ($(du -h ${ONNX_ACTOR} | cut -f1))"
 
 # ========================================================================
 # Part 1: Deploy RL Model and Scripts
@@ -81,32 +69,23 @@ echo ""
 echo "📁 Creating RL deployment directory on Pi..."
 ssh ${PI_USER}@${PI_HOST} "mkdir -p ${PI_RL_DIR}"
 
-# Copy TFLite model
+# Copy ONNX models
 echo ""
-echo "📦 Copying TFLite model..."
-scp "${TFLITE_MODEL}" ${PI_USER}@${PI_HOST}:${PI_RL_DIR}/
+echo "📦 Copying ONNX models..."
+scp "${ONNX_ACTOR}" ${PI_USER}@${PI_HOST}:${PI_RL_DIR}/
+if [ -f "${ONNX_NIK}" ]; then
+    scp "${ONNX_NIK}" ${PI_USER}@${PI_HOST}:${PI_RL_DIR}/
+fi
 
-# Copy deployment scripts
+# Copy deployment script
 echo ""
-echo "📦 Copying deployment scripts..."
-scp ${SCRIPT_DIR}/deploy_on_pi.py ${PI_USER}@${PI_HOST}:${PI_RL_DIR}/
-scp ${SCRIPT_DIR}/pi_servo_interface.py ${PI_USER}@${PI_HOST}:${PI_RL_DIR}/
+echo "📦 Copying deployment script..."
+scp ${SCRIPT_DIR}/deploy_drawing_on_pi.py ${PI_USER}@${PI_HOST}:${PI_RL_DIR}/
 
-# Copy FK utilities (REQUIRED for deploy_on_pi.py)
+# Make script executable on Pi
 echo ""
-echo "📦 Copying FK utilities..."
-SCRIPTS_PARENT_DIR="$(dirname "${SCRIPT_DIR}")"
-scp ${SCRIPTS_PARENT_DIR}/rl/fk_ik_utils.py ${PI_USER}@${PI_HOST}:${PI_RL_DIR}/
-
-# Copy servo test script
-echo ""
-echo "📦 Copying servo test script..."
-scp ${SCRIPT_DIR}/test1servo.py ${PI_USER}@${PI_HOST}:${PI_RL_DIR}/
-
-# Make scripts executable on Pi
-echo ""
-echo "🔧 Making scripts executable on Pi..."
-ssh ${PI_USER}@${PI_HOST} "chmod +x ${PI_RL_DIR}/*.py"
+echo "🔧 Making script executable on Pi..."
+ssh ${PI_USER}@${PI_HOST} "chmod +x ${PI_RL_DIR}/deploy_drawing_on_pi.py"
 
 echo ""
 echo "✅ Part 1 Complete: RL model and scripts deployed"
@@ -120,8 +99,8 @@ echo "📦 Part 2: Installing Dependencies on Pi"
 echo "========================================================================"
 
 echo ""
-echo "📦 Installing tflite-runtime on Pi (if not present)..."
-ssh ${PI_USER}@${PI_HOST} "pip3 install --quiet tflite-runtime 2>/dev/null || echo 'tflite-runtime may already be installed'"
+echo "📦 Installing onnxruntime on Pi (if not present)..."
+ssh ${PI_USER}@${PI_HOST} "pip3 install --quiet onnxruntime 2>/dev/null || echo 'onnxruntime may already be installed'"
 
 echo ""
 echo "📦 Installing servo libraries on Pi (if not present)..."
@@ -139,27 +118,24 @@ echo "✅ Deployment Complete!"
 echo "========================================================================"
 echo ""
 echo "📝 Files deployed to Pi (${PI_RL_DIR}):"
-echo "   ✓ $(basename ${TFLITE_MODEL})"
-echo "   ✓ deploy_on_pi.py"
-echo "   ✓ pi_servo_interface.py"
-echo "   ✓ fk_ik_utils.py"
+echo "   ✓ $(basename ${ONNX_ACTOR})"
+echo "   ✓ $(basename ${ONNX_NIK})"
+echo "   ✓ deploy_drawing_on_pi.py"
 echo ""
 echo "========================================================================"
 echo "🚀 Next Steps on Raspberry Pi"
 echo "========================================================================"
 echo ""
-echo "  Terminal 1 (Servo Interface):"
-echo "    cd ~/rl_deployment"
-echo "    python3 pi_servo_interface.py"
+echo "  Terminal 1 (wicom_roboarm servo interface):"
+echo "    cd ~/wicom_roboarm"
+echo "    ros2 launch wicom_roboarm wicom_roboarm.launch.py"
 echo ""
-echo "  Terminal 2 (RL Deployment):"
+echo "  Terminal 2 (RL drawing deployment):"
 echo "    cd ~/rl_deployment"
-echo "    python3 deploy_on_pi.py --model $(basename ${TFLITE_MODEL})"
+echo "    python3 deploy_drawing_on_pi.py --model $(basename ${ONNX_ACTOR}) --ik $(basename ${ONNX_NIK})"
 echo ""
 echo "  Options:"
-echo "    --target 0.0 -0.20 0.25   # Custom target position (x y z)"
-echo "    --episodes 5              # Number of episodes"
+echo "    --no-ros                  # Run without ROS (simulation mode)"
 echo "    --steps 100               # Max steps per episode"
 echo ""
 echo "========================================================================"
-

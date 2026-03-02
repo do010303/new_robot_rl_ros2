@@ -22,7 +22,7 @@ find_package(urdf REQUIRED)
 # Install
 ################################################################################
 # Install directories to share
-install(DIRECTORY meshes urdf launch config worlds scripts models
+install(DIRECTORY meshes urdf launch config worlds scripts models aruco_markers
   DESTINATION share/${PROJECT_NAME}
   USE_SOURCE_PERMISSIONS
 )
@@ -32,6 +32,9 @@ install(PROGRAMS
   scripts/target_manager.py
   scripts/drawing/line_visualizer.py
   scripts/drawing/gazebo_visualizer.py
+  scripts/vision/vision_aruco_detector.py
+  scripts/vision/camera_viewer.py
+  scripts/vision/camera_pose_controller.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

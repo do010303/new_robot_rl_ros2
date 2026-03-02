@@ -1,41 +1,52 @@
-# Build and install directories
+# === Build artifacts ===
 ros2_ws/build/
 ros2_ws/install/
 ros2_ws/log/
 
-# Reference/external projects
+# === Reference/external projects ===
 rl_model_based/
 
-# Python cache
+# === Python cache ===
 __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
 
-# IDE
+# === IDE ===
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# OS
+# === OS ===
 .DS_Store
 Thumbs.db
 
-# Backup files
+# === Backup files ===
 *.backup
 *.bak
-*~
 
-# ROS
+# === ROS bags ===
 *.bag
 *.db3
 
-# Training outputs (keep folder structure but ignore files)
-ros2_ws/src/robot_arm2/scripts/training_results/**/*
-!ros2_ws/src/robot_arm2/scripts/training_results/**/.gitkeep
+# === Training outputs (all packages) ===
+# Step logs, replay buffers, training plots, CSVs, PKLs
+**/training_results/
+**/checkpoints/
 
-# Checkpoints (keep neural_ik.pth)
-ros2_ws/src/robot_arm2/scripts/checkpoints/*
-!ros2_ws/src/robot_arm2/scripts/checkpoints/neural_ik.pth
+# === Large data / metrics logs ===
+*.jsonl
+*.pkl
+vision_metrics.csv
+
+# === Reference data (old buffers, weights) ===
+ref/buffer best/
+
+# === Deployment model files ===
+**/deployment/onnx_models/
+
+# === Gemini agent artifacts ===
+.gemini/
+*.log

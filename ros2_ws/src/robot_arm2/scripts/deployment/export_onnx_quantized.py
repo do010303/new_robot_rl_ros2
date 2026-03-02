@@ -77,39 +77,52 @@ def export_and_quantize(model_name, pth_path, onnx_path, model, input_dim):
     dummy_input = torch.randn(1, input_dim)
     
     try:
-        # Export WITHOUT tracing first to avoid ScriptModule issues
+        # Use legacy exporter (dynamo=False) to embed weights directly
         torch.onnx.export(
             model, dummy_input, onnx_path,
             export_params=True,
-            opset_version=15, # Try 15 which is widely supported
+            opset_version=13,  # Use 13 for best compatibility
             do_constant_folding=True,
             input_names=['input'],
             output_names=['output'],
-            dynamic_axes={'input': {0: 'batch'}, 'output': {0: 'batch'}}
+            dynamo=False  # Legacy exporter embeds weights
         )
         
-        # EXPLICIT SHAPE INFERENCE
+        # Load and re-save to ensure weights are embedded
         onnx_model = onnx.load(onnx_path)
         inferred_model = shape_inference.infer_shapes(onnx_model)
         onnx.save(inferred_model, onnx_path)
         
-        print(f"✅ Exported and Shape-Inferred ONNX: {onnx_path}")
+        print(f"✅ Exported ONNX: {onnx_path}")
     except Exception as e:
         print(f"❌ Export failed: {e}")
         return False
     
-    # Quantize
+    # Quantize with preprocessing
     quant_path = onnx_path.replace(".onnx", "_quant.onnx")
     try:
+        from onnxruntime.quantization import QuantFormat, preprocess
+        
+        # Preprocess the model (symbolic shape inference + optimization)
+        preproc_path = onnx_path.replace(".onnx", "_preproc.onnx")
+        preprocess.quant_pre_process(onnx_path, preproc_path, skip_symbolic_shape=False)
+        
+        # Quantize the preprocessed model
         quantize_dynamic(
-            onnx_path, 
+            preproc_path, 
             quant_path, 
             weight_type=QuantType.QInt8
         )
+        
+        # Clean up preprocessed file
+        if os.path.exists(preproc_path):
+            os.remove(preproc_path)
+            
         print(f"✅ Quantized (INT8) ONNX: {quant_path}")
     except Exception as e:
         print(f"❌ Quantization failed: {e}")
-        return False
+        # Still return True since unquantized model works
+        return True
     
     return True
 
@@ -118,14 +131,23 @@ def main():
     print("🎨 DRAWING RL -> QUANTIZED ONNX EXPORT (v5)")
     print("="*70)
     
+    # Use 'buffer best' directory for best trained model
+    buffer_best_dir = os.path.join(parent_dir, '..', '..', '..', '..', 'buffer best')
     checkpoints_dir = os.path.join(parent_dir, 'checkpoints')
     output_dir = os.path.join(script_dir, 'onnx_models')
     os.makedirs(output_dir, exist_ok=True)
     
-    actor_pth = os.path.join(checkpoints_dir, 'sac_drawing_neuralIK', 'actor_sac_best.pth')
+    # Actor from buffer best
+    actor_pth = os.path.join(buffer_best_dir, 'actor_sac_best.pth')
+    if not os.path.exists(actor_pth):
+        # Fallback to checkpoints
+        actor_pth = os.path.join(checkpoints_dir, 'sac_drawing_neuralIK', 'actor_sac_best.pth')
+    print(f"📂 Actor source: {actor_pth}")
+    
     export_and_quantize("Actor", actor_pth, os.path.join(output_dir, 'actor_drawing.onnx'), 
                          InferenceActor(STATE_DIM, ACTION_DIM), STATE_DIM)
     
+    # Neural IK from checkpoints (not in buffer best)
     nik_pth = os.path.join(checkpoints_dir, 'neural_ik.pth')
     export_and_quantize("Neural IK", nik_pth, os.path.join(output_dir, 'neural_ik.onnx'), 
                          InferenceNeuralIK(3, 512, 6), 3)
