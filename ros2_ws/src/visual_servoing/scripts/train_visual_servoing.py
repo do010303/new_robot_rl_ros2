@@ -1472,6 +1472,17 @@ def train_drawing(args):
         for _ in range(10):
             rclpy.spin_once(env, timeout_sec=0.1)
         
+        # Wait for ArUco board detection
+        print("\n⏳ Waiting for ArUco board detection...")
+        if not env.wait_for_initial_detection(timeout_sec=10.0):
+            print("⚠️  WARNING: No board detected! Shapes will use default position.")
+            user_confirm = input("   Continue anyway? (y/n): ").strip().lower()
+            if user_confirm != 'y':
+                print("❌ Training cancelled")
+                return
+        else:
+            print("✅ Board detected - shapes will be board-relative")
+        
         print("✅ Drawing Environment ready!")
         print(f"   Shape: {SHAPE_TYPE} ({TOTAL_WAYPOINTS} waypoints, {POINTS_PER_EDGE} per edge)")
         print(f"   Size: {SHAPE_SIZE*100:.0f}cm | Tolerance: ±{WAYPOINT_TOLERANCE*100:.0f}cm")
@@ -1603,6 +1614,16 @@ def train_drawing(args):
         else:
             print(f"\n📝 No pre-trained models found in {checkpoint_dir}/")
             print("   Starting with untrained agent")
+        
+        # Pre-flight check: spawn the shape once so user can verify
+        print("\n" + "="*70)
+        print("👀 PRE-FLIGHT CHECK: Spawning shape in Gazebo...")
+        env.reset_environment()
+        for _ in range(20):
+            rclpy.spin_once(env, timeout_sec=0.1)
+        
+        input("   Please verify the shape is correctly spawned in Gazebo. Press ENTER to start training...")
+        print("="*70)
         
         # Training loop
         print(f"\n🚀 Starting drawing training ({args.episodes} episodes)...\n")

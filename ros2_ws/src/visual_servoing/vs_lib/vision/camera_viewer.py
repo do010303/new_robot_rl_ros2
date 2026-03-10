@@ -15,8 +15,10 @@ import numpy as np
 import time
 from sensor_msgs.msg import Image, CameraInfo
 from geometry_msgs.msg import PoseStamped, Point, PointStamped
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, Float32MultiArray
 from cv_bridge import CvBridge
+import tf2_ros
+from rclpy.duration import Duration
 
 
 class CameraViewer(Node):
@@ -26,6 +28,10 @@ class CameraViewer(Node):
         super().__init__('camera_viewer')
         
         self.bridge = CvBridge()
+        
+        # TF2 for coordinate transform
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
         
         # Camera intrinsics
         self.camera_matrix = None
@@ -39,6 +45,12 @@ class CameraViewer(Node):
         self.current_target = None
         self.pen_trajectory = []
         self.max_trajectory_points = 200  # Last 200 points
+        self.shape_waypoints = None  # Full shape outline
+        
+        # Camera extrinsics (base_link → camera_link)
+        # Will be computed from board pose (rvec/tvec from ArUco)
+        self.cam_rvec = None
+        self.cam_tvec = None
         
         # FPS Calculation
         self.frame_count = 0
@@ -60,6 +72,10 @@ class CameraViewer(Node):
             Point, '/rl/current_target', self.target_callback, 10)
         self.create_subscription(
             PointStamped, '/rl/pen_position', self.pen_callback, 10)
+        self.create_subscription(
+            Float32MultiArray, '/rl/shape_waypoints', self.shape_callback, 10)
+        self.create_subscription(
+            Bool, '/rl/reset_trajectory', self.reset_trajectory_callback, 10)
         
         self.get_logger().info("Camera Viewer with RL Overlay started")
     
@@ -85,6 +101,18 @@ class CameraViewer(Node):
         self.pen_trajectory.append(msg.point)
         if len(self.pen_trajectory) > self.max_trajectory_points:
             self.pen_trajectory.pop(0)
+    
+    def shape_callback(self, msg):
+        """Receive full shape waypoints [x0,y0,z0, x1,y1,z1, ...]."""
+        data = msg.data
+        if len(data) >= 6:  # At least 2 points
+            self.shape_waypoints = np.array(data).reshape(-1, 3)
+            self.get_logger().info(f"Shape received: {len(self.shape_waypoints)} waypoints")
+    
+    def reset_trajectory_callback(self, msg):
+        """Clear pen trajectory on episode reset."""
+        self.pen_trajectory.clear()
+        self.get_logger().info("Trajectory cleared (episode reset)")
     
     def quaternion_to_rotation_matrix(self, q):
         """Convert quaternion [x, y, z, w] to 3x3 rotation matrix."""
@@ -159,18 +187,33 @@ class CameraViewer(Node):
             cv2.putText(cv_image, "PBVS MONITOR", (10, y0), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
             y0 += dy
-            cv2.putText(cv_image, f"pos=({pos.x:.3f},{pos.y:.3f},{pos.z:.3f})", 
-                       (10, y0), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-        
-        # Draw RL Training Overlays (if camera intrinsics available)
-        if self.camera_matrix is not None:
-            # Draw target (green circle)
-            if self.current_target is not None:
-                self._draw_target(cv_image, self.current_target)
+            cv2.putText(cv_image, f"cam=({pos.x:.3f},{pos.y:.3f},{pos.z:.3f})", 
+                       (10, y0), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
             
-            # Draw pen trajectory (purple line)
-            if len(self.pen_trajectory) > 1:
-                self._draw_trajectory(cv_image, self.pen_trajectory)
+            # Transform to base_link and show
+            try:
+                transform = self.tf_buffer.lookup_transform(
+                    'base_link', self.board_pose.header.frame_id,
+                    rclpy.time.Time(), timeout=Duration(seconds=0.05))
+                t = transform.transform.translation
+                r = transform.transform.rotation
+                qx, qy, qz, qw = r.x, r.y, r.z, r.w
+                rot = np.array([
+                    [1-2*(qy*qy+qz*qz), 2*(qx*qy-qz*qw), 2*(qx*qz+qy*qw)],
+                    [2*(qx*qy+qz*qw), 1-2*(qx*qx+qz*qz), 2*(qy*qz-qx*qw)],
+                    [2*(qx*qz-qy*qw), 2*(qy*qz+qx*qw), 1-2*(qx*qx+qy*qy)]
+                ])
+                pt = rot @ np.array([pos.x, pos.y, pos.z]) + np.array([t.x, t.y, t.z])
+                y0 += dy
+                cv2.putText(cv_image, f"base=({pt[0]:.3f},{pt[1]:.3f},{pt[2]:.3f})", 
+                           (10, y0), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
+            except Exception:
+                y0 += dy
+                cv2.putText(cv_image, "base=(TF2 pending...)", 
+                           (10, y0), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 255), 2)
+        
+        # NOTE: Shape/target/pen visualization handled by gazebo_visualizer.py
+        # (spawns 3D entities in Gazebo that camera sees naturally)
         
         # Status Text (Top Left)
         cv2.putText(cv_image, f"{status_text} | Latency: {latency_ms:.1f}ms", 
@@ -189,54 +232,7 @@ class CameraViewer(Node):
             self.pen_trajectory.clear()
             self.get_logger().info("Trajectory cleared")
     
-    def _draw_target(self, image, target):
-        """Project and draw target as green circle."""
-        try:
-            # 3D point in base_link frame
-            point_3d = np.array([[target.x], [target.y], [target.z]], dtype=np.float64)
-            
-            # Project to image plane (assuming camera frame aligned with base_link)
-            # For proper projection, we'd need camera extrinsics (base_link -> camera)
-            # Simplified: project assuming identity transform
-            rvec = np.zeros(3, dtype=np.float64)
-            tvec = np.zeros(3, dtype=np.float64)
-            
-            points_2d, _ = cv2.projectPoints(
-                point_3d.T, rvec, tvec,
-                self.camera_matrix, self.dist_coeffs
-            )
-            
-            # Draw target
-            pt = tuple(points_2d[0][0].astype(int))
-            if 0 <= pt[0] < image.shape[1] and 0 <= pt[1] < image.shape[0]:
-                cv2.circle(image, pt, 20, (0, 255, 0), 3)  # Green outer circle
-                cv2.circle(image, pt, 5, (0, 255, 0), -1)  # Green center
-                # Label
-                cv2.putText(image, "TARGET", (pt[0] + 25, pt[1] - 10),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-        except Exception as e:
-            pass  # Silently ignore projection errors
-    
-    def _draw_trajectory(self, image, trajectory):
-        """Project and draw pen trajectory as purple line."""
-        try:
-            # Convert trajectory to numpy array
-            points_3d = np.array([[p.x, p.y, p.z] for p in trajectory], dtype=np.float64)
-            
-            # Project all points
-            rvec = np.zeros(3, dtype=np.float64)
-            tvec = np.zeros(3, dtype=np.float64)
-            
-            points_2d, _ = cv2.projectPoints(
-                points_3d, rvec, tvec,
-                self.camera_matrix, self.dist_coeffs
-            )
-            
-            # Draw polyline
-            pts = points_2d.reshape(-1, 1, 2).astype(np.int32)
-            cv2.polylines(image, [pts], False, (255, 0, 255), 3)  # Purple line
-        except Exception as e:
-            pass  # Silently ignore projection errors
+
             
 def main(args=None):
     rclpy.init(args=args)

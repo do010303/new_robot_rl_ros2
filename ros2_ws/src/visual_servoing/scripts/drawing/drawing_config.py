@@ -33,7 +33,7 @@ else:
 # =============================================================================
 
 # Square size (side length in meters)
-SHAPE_SIZE = 0.06  # 6cm sides (fits within 7cm safe zone)
+SHAPE_SIZE = 0.10  # 10cm sides requested by user
 
 # Y-plane (drawing surface - set dynamically by ArUco detection)
 Y_PLANE = -0.27  # Default ~-0.27m (updated from board detection)
@@ -44,7 +44,7 @@ USE_DYNAMIC_WORKSPACE = True  # Enable dynamic centering on detected board
 TRIANGLE_CENTER = (0.0, -0.27, 0.25)  # X=0, Y=-0.27m, Z=0.25m
 
 # Workspace radius (safe drawing area from center)
-WORKSPACE_RADIUS = 0.035  # 3.5cm radius (7cm diameter)
+WORKSPACE_RADIUS = 0.07  # 7cm radius (14cm diameter) to fit 10cm shape
 
 # =============================================================================
 # TRAINING PARAMETERS

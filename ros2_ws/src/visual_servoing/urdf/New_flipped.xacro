@@ -50,10 +50,18 @@
 <joint name="camera_joint" type="fixed">
   <parent link="base_link"/>
   <child link="camera_link"/>
-  <!-- Position at Y=0.15 (forward from base) -->
+  <!-- Position at Y=0.09 (forward from base) -->
   <!-- Camera on FLIPPED base: More negative pitch = tilt UP (inverted) -->
   <!-- Markers at Y=-0.27, pitch -1.9 to frame all 4 -->
   <origin xyz="0 0.09 0" rpy="0 -2.3 -1.5708"/>
+</joint>
+
+<!-- Standard ROS Camera Optical Link (Z-forward, X-right, Y-down) -->
+<link name="camera_optical_link"/>
+<joint name="camera_optical_joint" type="fixed">
+  <origin xyz="0 0 0" rpy="-1.5708 0 -1.5708"/>
+  <parent link="camera_link"/>
+  <child link="camera_optical_link"/>
 </joint>
 
 <!-- ==================== ROBOT LINKS ==================== -->

@@ -1,31 +1,36 @@
 #!/usr/bin/env python3
 """
-Shape Generator for Drawing Tasks
+Shape Generator for Drawing Tasks (Board-Local Coordinates)
 
-Generates waypoint sequences for various polygon shapes.
-Used by the drawing RL environment to define drawing objectives.
+Generates waypoint sequences in BOARD-LOCAL 2D coordinates:
+  - X = left/right on board surface
+  - Y = up/down on board surface  
+  - Z = 0 (on the board plane)
+  - 4th coord = 1.0 (homogeneous for 4×4 transform)
 
-Shapes are generated on a flat Y-plane (vertical drawing surface).
+Board center = origin (0, 0, 0).
+Shapes are transformed to base_link via BoardTransform pipeline.
 """
 
 import numpy as np
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 from dataclasses import dataclass
+import math
 
 
 @dataclass
 class Shape:
-    """A drawable shape defined by waypoints"""
+    """A drawable shape defined by waypoints in board-local coordinates."""
     name: str
-    waypoints: np.ndarray  # (N, 3) array of [x, y, z] coordinates
-    closed: bool = True    # Whether to return to start point
+    waypoints: np.ndarray  # (N, 4) array of [x, y, 0, 1] in board-local frame
+    closed: bool = True
     
     @property
     def num_waypoints(self) -> int:
         return len(self.waypoints)
     
     def get_waypoint(self, index: int) -> np.ndarray:
-        """Get waypoint at index (wraps around if closed)"""
+        """Get waypoint at index (wraps around if closed)."""
         if self.closed:
             return self.waypoints[index % len(self.waypoints)]
         else:
@@ -34,277 +39,186 @@ class Shape:
 
 class ShapeGenerator:
     """
-    Generates drawable shapes as waypoint sequences.
+    Generates drawable shapes in board-local 2D coordinates.
     
-    All shapes are generated on a flat Y-plane (Y = constant).
-    This simulates a vertical drawing surface in front of the robot.
+    All shapes are centered at board origin (0, 0).
+    X/Y are on the board surface, Z=0.
+    Coordinates are in METERS.
     """
     
-    def __init__(self, 
-                 y_plane: float = 0.20,
-                 x_center: float = 0.0,
-                 z_center: float = 0.25,
-                 default_size: float = 0.10):
+    def __init__(self, safe_zone_m: float = 0.035):
         """
-        Initialize shape generator.
-        
         Args:
-            y_plane: Y coordinate of drawing surface (constant)
-            x_center: X center of shapes
-            z_center: Z center of shapes  
-            default_size: Default size for shapes (meters)
+            safe_zone_m: Half-width of safe drawing zone in meters.
+                         Default 3.5cm = half of 7cm safe zone.
+                         Shapes are scaled to fit within this radius.
         """
-        self.y_plane = y_plane
-        self.x_center = x_center
-        self.z_center = z_center
-        self.default_size = default_size
+        self.safe_zone_m = safe_zone_m
+    
+    def _to_board_points(self, xy_points: List[Tuple[float, float]], z_offset: float = -0.005) -> np.ndarray:
+        """Convert list of (x, y) tuples to board-local homogeneous coords."""
+        points = []
+        for x, y in xy_points:
+            # Negative Z offset pulls points TOWARDS the camera (Out of the board)
+            # in the OpenCV/ROS-Optical frame (Z is depth into scene).
+            # -5mm keeps waypoints visible and safe from clipping.
+            points.append([x, y, z_offset, 1.0])
+        return np.array(points, dtype=np.float64)
     
     def equilateral_triangle(self, 
                              size: float = None,
-                             center: Tuple[float, float] = None,
+                             center: Tuple[float, float] = (0.0, 0.0),
                              points_per_edge: int = 1) -> Shape:
         """
-        Generate equilateral triangle waypoints.
-        
-        Triangle is oriented with apex at top, base at bottom.
+        Generate INVERTED equilateral triangle (apex at bottom) in board-local coords.
         
         Args:
-            size: Side length in meters (default: default_size)
-            center: (x, z) center position (default: use generator defaults)
-            points_per_edge: Points per edge (1=corners only, 3=10 total, etc.)
+            size: Side length in meters (default: 2 * safe_zone_m)
+            center: (x, y) center on board surface (default: origin)
+            points_per_edge: Points per edge (1=corners only)
             
         Returns:
-            Shape object with (points_per_edge * 3 + 1) waypoints
-            - points_per_edge=1: 4 waypoints (3 corners + 1 return)
-            - points_per_edge=3: 10 waypoints (9 + 1 return)
+            Shape with waypoints in board-local [x, y, 0, 1] format
         """
-        size = size or self.default_size
-        cx = center[0] if center else self.x_center
-        cz = center[1] if center else self.z_center
-        
-        # Equilateral triangle geometry
-        # Height = size * sqrt(3) / 2
+        size = size or (self.safe_zone_m * 2)
+        cx, cy = center
         height = size * np.sqrt(3) / 2
         
-        # Vertices - START FROM TOP (apex)
-        #     P1 (apex/start)
-        #    /  \
-        #   /    \
-        #  P2----P3
-        
-        p1 = np.array([cx,          self.y_plane, cz + 2*height/3])  # Top (apex/START)
-        p2 = np.array([cx - size/2, self.y_plane, cz - height/3])    # Bottom-left
-        p3 = np.array([cx + size/2, self.y_plane, cz - height/3])    # Bottom-right
-        
-        corners = [p1, p2, p3, p1]  # TOP→Bottom-left→Bottom-right→TOP
-        
-        # Generate waypoints
-        if points_per_edge == 1:
-            # Original behavior: just corners + return
-            waypoints = np.array([p1, p2, p3, p1])
-        else:
-            # Interpolate points along each edge
-            waypoints = []
-            for i in range(3):  # 3 edges
-                start = corners[i]
-                end = corners[i + 1]
-                # Exclude endpoint to avoid duplicates
-                for t in np.linspace(0, 1, points_per_edge, endpoint=False):
-                    point = start + t * (end - start)
-                    waypoints.append(point)
-            # Add return to start
-            waypoints.append(p1)
-            waypoints = np.array(waypoints)
-        
-        total_wp = len(waypoints)
-        return Shape(
-            name=f"equilateral_triangle_{total_wp}wp",
-            waypoints=waypoints,
-            closed=True
-        )
-    
-    def dense_triangle(self, 
-                       size: float = None,
-                       center: Tuple[float, float] = None,
-                       points_per_edge: int = 10) -> Shape:
-        """
-        Generate equilateral triangle with dense waypoints along edges.
-        
-        This creates a continuous trajectory for smooth drawing,
-        with many intermediate points between corners.
-        
-        Args:
-            size: Side length in meters
-            center: (x, z) center position
-            points_per_edge: Number of waypoints per edge (default: 10)
-            
-        Returns:
-            Shape with (points_per_edge * 3) waypoints for smooth trajectory
-        """
-        size = size or self.default_size
-        cx = center[0] if center else self.x_center
-        cz = center[1] if center else self.z_center
-        
-        # Triangle corners
-        height = size * np.sqrt(3) / 2
-        p1 = np.array([cx - size/2, self.y_plane, cz - height/3])  # Bottom-left
-        p2 = np.array([cx,          self.y_plane, cz + 2*height/3])  # Top (apex)
-        p3 = np.array([cx + size/2, self.y_plane, cz - height/3])  # Bottom-right
+        # INVERTED triangle: apex at BOTTOM (Requested "upside down")
+        # P2------P3
+        #   \    /
+        #    \  /
+        #     P1 (apex at bottom)
+        p1 = (cx,          cy - 2*height/3)  # Bottom apex
+        p2 = (cx - size/2, cy + height/3)    # Top-left
+        p3 = (cx + size/2, cy + height/3)    # Top-right
         
         corners = [p1, p2, p3, p1]  # Close the triangle
         
-        # Generate dense points along each edge
-        waypoints = []
-        for i in range(3):  # 3 edges
-            start = corners[i]
-            end = corners[i + 1]
-            
-            # Interpolate points along edge (excluding end point to avoid duplicates)
+        if points_per_edge == 1:
+            return Shape(
+                name=f"triangle_4wp",
+                waypoints=self._to_board_points(corners),
+                closed=True
+            )
+        
+        # Interpolate points along edges
+        points = []
+        for i in range(3):
+            start = np.array(corners[i])
+            end = np.array(corners[i + 1])
             for t in np.linspace(0, 1, points_per_edge, endpoint=False):
-                point = start + t * (end - start)
-                waypoints.append(point)
-        
-        # Add return to start point to complete the shape
-        waypoints.append(p1)
-        
-        waypoints = np.array(waypoints)
+                pt = start + t * (end - start)
+                points.append(tuple(pt))
+        points.append(p1)  # Return to start
         
         return Shape(
-            name=f"dense_triangle_{points_per_edge}pp_edge",
-            waypoints=waypoints,
+            name=f"triangle_{len(points)}wp",
+            waypoints=self._to_board_points(points),
             closed=True
         )
     
-    def square(self, size: float = None, center: Tuple[float, float] = None) -> Shape:
-        """Generate square waypoints (4 corners + return to start)"""
-        size = size or self.default_size
-        cx = center[0] if center else self.x_center
-        cz = center[1] if center else self.z_center
-        
+    def dense_triangle(self, size: float = None,
+                       center: Tuple[float, float] = (0.0, 0.0),
+                       points_per_edge: int = 10) -> Shape:
+        """Dense inverted triangle with many waypoints per edge."""
+        return self.equilateral_triangle(size, center, points_per_edge)
+    
+    def square(self, size: float = None,
+               center: Tuple[float, float] = (0.0, 0.0)) -> Shape:
+        """Generate square in board-local coords."""
+        size = size or (self.safe_zone_m * 2)
+        cx, cy = center
         half = size / 2
         
-        #  P4----P3
-        #  |      |
-        #  |      |
-        #  P1----P2
-        
-        p1 = np.array([cx - half, self.y_plane, cz - half])  # Bottom-left
-        p2 = np.array([cx + half, self.y_plane, cz - half])  # Bottom-right
-        p3 = np.array([cx + half, self.y_plane, cz + half])  # Top-right
-        p4 = np.array([cx - half, self.y_plane, cz + half])  # Top-left
-        
-        waypoints = np.array([p1, p2, p3, p4, p1])
-        
-        return Shape(name="square", waypoints=waypoints, closed=True)
+        points = [
+            (cx - half, cy - half),  # Bottom-left
+            (cx + half, cy - half),  # Bottom-right
+            (cx + half, cy + half),  # Top-right
+            (cx - half, cy + half),  # Top-left
+            (cx - half, cy - half),  # Close
+        ]
+        return Shape(name="square", waypoints=self._to_board_points(points), closed=True)
     
-    def line(self, 
-             start: Tuple[float, float] = None,
-             end: Tuple[float, float] = None,
-             length: float = None) -> Shape:
-        """
-        Generate simple line (2 waypoints).
+    def polygon(self, n_sides: int, scale: float = 1.0) -> Shape:
+        """Generate regular polygon centered at origin."""
+        radius = self.safe_zone_m * scale
+        offset_angle = -math.pi / 2  # Start from top
         
-        Args:
-            start: (x, z) start position
-            end: (x, z) end position  
-            length: If start/end not given, create horizontal line of this length
-        """
-        if start and end:
-            p1 = np.array([start[0], self.y_plane, start[1]])
-            p2 = np.array([end[0], self.y_plane, end[1]])
-        else:
-            length = length or self.default_size
-            p1 = np.array([self.x_center - length/2, self.y_plane, self.z_center])
-            p2 = np.array([self.x_center + length/2, self.y_plane, self.z_center])
-        
-        return Shape(name="line", waypoints=np.array([p1, p2]), closed=False)
-    
-    def polygon(self, n_sides: int, size: float = None) -> Shape:
-        """Generate regular polygon with n sides"""
-        size = size or self.default_size
-        radius = size / (2 * np.sin(np.pi / n_sides))  # Circumradius
-        
-        angles = np.linspace(np.pi/2, np.pi/2 + 2*np.pi, n_sides, endpoint=False)
-        
-        waypoints = []
-        for angle in angles:
-            x = self.x_center + radius * np.cos(angle)
-            z = self.z_center + radius * np.sin(angle)
-            waypoints.append([x, self.y_plane, z])
-        
-        # Close the shape
-        waypoints.append(waypoints[0])
+        points = []
+        for i in range(n_sides + 1):
+            theta = offset_angle + (2 * math.pi * i / n_sides)
+            x = radius * math.cos(theta)
+            y = radius * math.sin(theta)
+            points.append((x, y))
         
         return Shape(
             name=f"polygon_{n_sides}",
-            waypoints=np.array(waypoints),
+            waypoints=self._to_board_points(points),
             closed=True
         )
     
-    def random_triangle(self, 
-                        workspace_x: Tuple[float, float] = (-0.15, 0.15),
-                        workspace_z: Tuple[float, float] = (0.15, 0.35),
-                        min_size: float = 0.05,
-                        max_size: float = 0.15) -> Shape:
-        """
-        Generate random equilateral triangle within workspace.
+    def line(self, length: float = None, angle_deg: float = 0.0) -> Shape:
+        """Generate a line through the center."""
+        length = length or (self.safe_zone_m * 2)
+        rad = math.radians(angle_deg)
+        half = length / 2
         
-        Args:
-            workspace_x: (min, max) X bounds
-            workspace_z: (min, max) Z bounds
-            min_size: Minimum triangle size
-            max_size: Maximum triangle size
-        """
+        points = [
+            (-half * math.cos(rad), -half * math.sin(rad)),
+            ( half * math.cos(rad),  half * math.sin(rad)),
+        ]
+        return Shape(name="line", waypoints=self._to_board_points(points), closed=False)
+    
+    def random_triangle(self, min_size: float = 0.03, max_size: float = None) -> Shape:
+        """Generate random triangle within safe zone."""
+        max_size = max_size or (self.safe_zone_m * 1.5)
         size = np.random.uniform(min_size, max_size)
         height = size * np.sqrt(3) / 2
         
-        # Random center that keeps triangle in bounds
-        margin_x = size / 2 + 0.01
-        margin_z = height / 2 + 0.01
+        margin_x = size / 2 + 0.005
+        margin_y = height / 2 + 0.005
         
-        cx = np.random.uniform(workspace_x[0] + margin_x, workspace_x[1] - margin_x)
-        cz = np.random.uniform(workspace_z[0] + margin_z, workspace_z[1] - margin_z)
+        max_offset = self.safe_zone_m - max(margin_x, margin_y)
+        max_offset = max(0.001, max_offset)
         
-        return self.equilateral_triangle(size=size, center=(cx, cz))
+        cx = np.random.uniform(-max_offset, max_offset)
+        cy = np.random.uniform(-max_offset, max_offset)
+        
+        return self.equilateral_triangle(size=size, center=(cx, cy))
 
 
 def test_shape_generator():
-    """Test shape generation"""
+    """Test shape generation in board-local coordinates."""
     print("=" * 60)
-    print("Testing Shape Generator")
+    print("Testing Board-Local Shape Generator")
     print("=" * 60)
     
-    gen = ShapeGenerator(y_plane=0.20, x_center=0.0, z_center=0.25)
+    gen = ShapeGenerator(safe_zone_m=0.035)
     
-    # Test equilateral triangle
-    triangle = gen.equilateral_triangle(size=0.10)
-    print(f"\n{triangle.name}:")
-    print(f"  Waypoints: {triangle.num_waypoints}")
-    for i, wp in enumerate(triangle.waypoints):
-        print(f"  P{i+1}: ({wp[0]:.3f}, {wp[1]:.3f}, {wp[2]:.3f})")
+    # Test triangle
+    tri = gen.equilateral_triangle(size=0.06)
+    print(f"\n{tri.name}:")
+    print(f"  Waypoints: {tri.num_waypoints}")
+    for i, wp in enumerate(tri.waypoints):
+        print(f"  P{i}: ({wp[0]:.4f}, {wp[1]:.4f}, {wp[2]:.4f}, {wp[3]:.1f})")
     
-    # Verify equilateral
-    d12 = np.linalg.norm(triangle.waypoints[1] - triangle.waypoints[0])
-    d23 = np.linalg.norm(triangle.waypoints[2] - triangle.waypoints[1])
-    d31 = np.linalg.norm(triangle.waypoints[0] - triangle.waypoints[2])
-    print(f"  Side lengths: {d12:.4f}, {d23:.4f}, {d31:.4f}")
-    print(f"  Equilateral: {np.allclose([d12, d23, d31], d12)}")
+    # Verify: all Z=0, all W=1
+    assert np.allclose(tri.waypoints[:, 2], 0.0), "Z should be 0"
+    assert np.allclose(tri.waypoints[:, 3], 1.0), "W should be 1"
     
     # Test square
-    square = gen.square(size=0.08)
-    print(f"\n{square.name}:")
-    print(f"  Waypoints: {square.num_waypoints}")
+    sq = gen.square(size=0.05)
+    print(f"\n{sq.name}:")
+    print(f"  Waypoints: {sq.num_waypoints}")
     
-    # Test random triangle
-    np.random.seed(42)
-    rand_tri = gen.random_triangle()
-    print(f"\nrandom_triangle:")
-    print(f"  Waypoints: {rand_tri.num_waypoints}")
-    for i, wp in enumerate(rand_tri.waypoints):
-        print(f"  P{i+1}: ({wp[0]:.3f}, {wp[1]:.3f}, {wp[2]:.3f})")
+    # Test dense triangle
+    dense = gen.dense_triangle(size=0.06, points_per_edge=7)
+    print(f"\n{dense.name}:")
+    print(f"  Waypoints: {dense.num_waypoints}")
     
     print("\n" + "=" * 60)
-    print("Shape generator OK!")
+    print("Board-local shape generator OK!")
 
 
 if __name__ == '__main__':

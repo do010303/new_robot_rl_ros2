@@ -17,6 +17,9 @@ import numpy as np
 import time
 from typing import Tuple, Optional, List
 from geometry_msgs.msg import Point, PoseStamped, PointStamped
+from std_msgs.msg import Float32MultiArray, Bool
+import tf2_ros
+from rclpy.duration import Duration
 
 try:
     from gymnasium import spaces
@@ -28,6 +31,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from rl.rl_environment import RLEnvironment
+from rl.board_transform import BoardTransform
 from drawing.shape_generator import ShapeGenerator, Shape
 
 
@@ -66,10 +70,15 @@ class DrawingEnvironment(RLEnvironment):
         self.randomize_shape = randomize_shape
         self.use_dynamic_workspace = use_dynamic_workspace
         
-        # Dynamic workspace (updated by ArUco detection)
+        # Board-local transform pipeline
         self.board_detected = False
         self.board_pose: Optional[PoseStamped] = None
         self.dynamic_workspace_center = np.array([0.0, y_plane, 0.25])
+        
+        # TF2 for board transform
+        self.drawing_tf_buffer = tf2_ros.Buffer()
+        self.drawing_tf_listener = tf2_ros.TransformListener(self.drawing_tf_buffer, self)
+        self.board_transform = BoardTransform(self.drawing_tf_buffer)
         
         # Subscribe to board detection
         if self.use_dynamic_workspace:
@@ -79,9 +88,9 @@ class DrawingEnvironment(RLEnvironment):
             )
             self.get_logger().info("📡 Subscribed to /vision/board_pose for dynamic workspace")
         
-        self.shape_generator = ShapeGenerator(
-            y_plane=y_plane, x_center=0.0, z_center=0.25, default_size=shape_size
-        )
+        # Shape generator now works in board-local 2D coordinates
+        safe_zone_m = shape_size / 2  # half of shape size as safe zone radius
+        self.shape_generator = ShapeGenerator(safe_zone_m=safe_zone_m)
         
         self.current_shape: Optional[Shape] = None
         self.waypoints: np.ndarray = np.array([])
@@ -93,6 +102,8 @@ class DrawingEnvironment(RLEnvironment):
         # Publishers for camera overlay
         self.target_pub = self.create_publisher(Point, '/rl/current_target', 10)
         self.pen_pub = self.create_publisher(PointStamped, '/rl/pen_position', 10)
+        self.shape_pub = self.create_publisher(Float32MultiArray, '/rl/shape_waypoints', 10)
+        self.reset_traj_pub = self.create_publisher(Bool, '/rl/reset_trajectory', 10)
         
         # Publisher for drawing (legacy - keeping for compatibility)
         self.pen_position_pub = self.create_publisher(Point, '/drawing/pen_position', 10)
@@ -128,24 +139,33 @@ class DrawingEnvironment(RLEnvironment):
         self.get_logger().info("✅ Drawing Environment ready!")
     
     def _board_callback(self, msg: PoseStamped):
-        """Update workspace dynamically from ArUco board detection."""
-        if not self.board_detected:
-            self.get_logger().info("🎯 ArUco board detected!")
+        """Build board-to-base_link transform from ArUco detection.
+        
+        Stores the full 4x4 T_vision matrix (board->camera) and combines
+        with TF2 (camera->base_link) for the complete transform pipeline.
+        Board-local shapes will be transformed through this pipeline.
+        """
+        if self.board_detected:
+            return  # Already locked
+        
+        # Build combined transform: board-local -> camera -> base_link
+        success = self.board_transform.update_from_pose(msg)
+        
+        if not success:
+            self.get_logger().debug("TF2 not ready for board transform")
+            return
         
         self.board_detected = True
         self.board_pose = msg
         
-        # Extract workspace center from detected board
-        self.dynamic_workspace_center = np.array([
-            msg.pose.position.x,
-            msg.pose.position.y,
-            msg.pose.position.z
-        ])
+        # Get board center in base_link for workspace bounds
+        center = self.board_transform.get_board_center_base()
+        self.dynamic_workspace_center = center
         
-        # Update shape generator with detected position
-        self.shape_generator.x_center = msg.pose.position.x
-        self.shape_generator.y_plane = msg.pose.position.y
-        self.shape_generator.z_center = msg.pose.position.z
+        self.get_logger().info(
+            f"🔒 Board LOCKED (board->base_link transform ready)\n"
+            f"   Board center at base_link: [{center[0]:.3f}, {center[1]:.3f}, {center[2]:.3f}]"
+        )
     
     def wait_for_initial_detection(self, timeout_sec=10.0):
         """Wait for initial ArUco board detection before training."""
@@ -171,26 +191,42 @@ class DrawingEnvironment(RLEnvironment):
             return False
     
     def _generate_shape(self) -> Shape:
-        """Generate the target shape."""
-        # Import config to ensure we use the correct point count
+        """Generate shape in board-local coords, then transform to base_link."""
         from drawing.drawing_config import POINTS_PER_EDGE
         
+        # 1. Generate shape in board-local 2D coords [x, y, 0, 1]
         if self.shape_type == 'triangle':
-            return self.shape_generator.equilateral_triangle(
+            shape = self.shape_generator.equilateral_triangle(
                 size=self.shape_size, 
                 points_per_edge=POINTS_PER_EDGE
             )
         elif self.shape_type == 'dense_triangle':
-            # Continuous trajectory with 10 points per edge = 30 waypoints
-            return self.shape_generator.dense_triangle(size=self.shape_size, points_per_edge=10)
+            shape = self.shape_generator.dense_triangle(size=self.shape_size, points_per_edge=10)
         elif self.shape_type == 'square':
-            return self.shape_generator.square(size=self.shape_size)
+            shape = self.shape_generator.square(size=self.shape_size)
         elif self.shape_type == 'line':
-            return self.shape_generator.line(length=self.shape_size)
+            shape = self.shape_generator.line(length=self.shape_size)
         elif self.shape_type == 'random_triangle':
-            return self.shape_generator.random_triangle(min_size=0.05, max_size=self.shape_size)
+            shape = self.shape_generator.random_triangle(min_size=0.05, max_size=self.shape_size)
         else:
-            return self.shape_generator.equilateral_triangle(size=self.shape_size)
+            self.get_logger().warn(f"Unknown shape type {self.shape_type}, falling back to triangle")
+            shape = self.shape_generator.equilateral_triangle(
+                size=self.shape_size,
+                points_per_edge=POINTS_PER_EDGE
+            )
+        
+        # 2. Transform waypoints: board-local -> base_link
+        if self.board_transform.locked:
+            base_pts = self.board_transform.board_to_base(shape.waypoints)
+            shape.waypoints = base_pts  # Now (N, 3) in base_link frame
+            self.get_logger().info(
+                f"📐 Shape '{shape.name}' transformed to base_link "
+                f"(center: [{base_pts.mean(axis=0)[0]:.3f}, {base_pts.mean(axis=0)[1]:.3f}, {base_pts.mean(axis=0)[2]:.3f}])"
+            )
+        else:
+            self.get_logger().warn("⚠️ Board transform not ready — using raw board-local coords")
+        
+        return shape
     
     def get_state(self) -> Optional[np.ndarray]:
         """Get current state including waypoint progress."""
@@ -235,6 +271,7 @@ class DrawingEnvironment(RLEnvironment):
         self.current_step = 0
         
         self.current_shape = self._generate_shape()
+        # Waypoints are now (N, 3) in base_link frame
         self.waypoints = self.current_shape.waypoints
         self.total_waypoints = len(self.waypoints)
         self.waypoint_index = 0
@@ -250,10 +287,12 @@ class DrawingEnvironment(RLEnvironment):
         self._move_to_joint_positions(np.zeros(6), duration=2.0)
         time.sleep(0.5)
         
-        # Set first waypoint and publish to camera
+        # Set first waypoint and publish
         if len(self.waypoints) > 0:
-            self.target_x, self.target_y, self.target_z = self.waypoints[0]
-            self._publish_target(self.waypoints[0])
+            wp = self.waypoints[0]
+            self.target_x, self.target_y, self.target_z = wp[0], wp[1], wp[2]
+            self._publish_target(wp)
+            self._publish_shape()  # Publish full shape outline
         
         time.sleep(0.2)
         self.get_logger().info(f"✅ Drawing reset! Shape: {self.current_shape.name}")
@@ -264,8 +303,21 @@ class DrawingEnvironment(RLEnvironment):
         msg = Point(x=float(target[0]), y=float(target[1]), z=float(target[2]))
         self.target_pub.publish(msg)
     
+    def _publish_shape(self):
+        """Publish all shape waypoints as flat array for camera overlay."""
+        if self.waypoints is None or len(self.waypoints) == 0:
+            return
+        msg = Float32MultiArray()
+        msg.data = self.waypoints.flatten().tolist()  # [x0,y0,z0, x1,y1,z1, ...]
+        self.shape_pub.publish(msg)
+        self.get_logger().info(f"📐 Published shape outline ({len(self.waypoints)} waypoints)")
+    
     def _reset_line_visualization(self):
-        """Call line visualizer reset service."""
+        """Reset line visualization for new episode."""
+        # Reset camera overlay trajectory
+        self.reset_traj_pub.publish(Bool(data=True))
+        
+        # Legacy Gazebo line reset
         if self.reset_line_client.wait_for_service(timeout_sec=0.5):
             from std_srvs.srv import Empty
             self.reset_line_client.call_async(Empty.Request())
@@ -301,6 +353,11 @@ class DrawingEnvironment(RLEnvironment):
         time.sleep(0.1)  # Reduced delay for faster line drawing
         
         self._publish_pen_position()
+        
+        # Continuously publish shape every step to handle late subscriptions
+        # or Gazebo visualizer slow startups
+        if self.current_step % 5 == 0:
+            self._publish_shape()
         
         next_state = self.get_state()
         if next_state is None:

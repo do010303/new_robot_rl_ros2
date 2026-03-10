@@ -12,6 +12,7 @@ from rclpy.node import Node
 import cv2
 import cv2.aruco as aruco
 import numpy as np
+from scipy.spatial.transform import Rotation as R_scipy
 import os
 
 from sensor_msgs.msg import Image, CameraInfo
@@ -39,6 +40,9 @@ def get_marker_corners_3d(center_x, center_y, half_size):
 
 
 # Board marker positions (IDs 0-3 at corners)
+# Standard ArUco Board Layout:
+# 0: Top-Left, 1: Top-Right, 2: Bottom-Right, 3: Bottom-Left
+# Using standard 2D coords: X-right, Y-up (relative to board center)
 BOARD_CONFIG_3D = {
     0: get_marker_corners_3d(-OFFSET,  OFFSET, HALF_MARKER),  # Top-left
     1: get_marker_corners_3d( OFFSET,  OFFSET, HALF_MARKER),  # Top-right
@@ -109,6 +113,10 @@ class VisionArucoDetector(Node):
         self.last_board_pose = None
         self.last_detection_time = 0.0
         self.detection_count = 0
+        self.board_locked = False
+        self.locked_pose = None
+        self.pose_buffer = []  # To average multiple detections for stable lock
+        self.buffer_size = 30  # Average 30 frames for a solid lock
         self.cache_timeout = 1.0  # Use cached pose for 1 second after losing detection
         
         self.get_logger().info(f"[VisionAruco] Started, listening on {image_topic}")
@@ -164,36 +172,70 @@ class VisionArucoDetector(Node):
                 )
                 
                 if success:
-                    detected.data = True
+                    # Convert rotation vector to matrix then to quaternion using scipy
+                    R_mat, _ = cv2.Rodrigues(rvec)
+                    quat = R_scipy.from_matrix(R_mat).as_quat() # [x, y, z, w]
+                    
+                    # Store in temporary pose
+                    current_pose = PoseStamped()
+                    current_pose.header.stamp = self.get_clock().now().to_msg()
+                    current_pose.header.frame_id = 'camera_optical_link'
+                    current_pose.pose.position.x = float(tvec[0])
+                    current_pose.pose.position.y = float(tvec[1])
+                    current_pose.pose.position.z = float(tvec[2])
+                    current_pose.pose.orientation.x = float(quat[0])
+                    current_pose.pose.orientation.y = float(quat[1])
+                    current_pose.pose.orientation.z = float(quat[2])
+                    current_pose.pose.orientation.w = float(quat[3])
+                    
+                    if not self.board_locked:
+                        # Collect samples for averaging
+                        self.pose_buffer.append(current_pose)
+                        if len(self.pose_buffer) >= self.buffer_size:
+                            # Average position
+                            avg_pos = np.mean([
+                                [p.pose.position.x, p.pose.position.y, p.pose.position.z] 
+                                for p in self.pose_buffer
+                            ], axis=0)
+                            
+                            # Average quaternion (simple mean + normalize is robust for close rotations)
+                            avg_q = np.mean([
+                                [p.pose.orientation.x, p.pose.orientation.y, 
+                                 p.pose.orientation.z, p.pose.orientation.w]
+                                for p in self.pose_buffer
+                            ], axis=0)
+                            avg_q /= np.linalg.norm(avg_q)
+                            
+                            self.locked_pose = PoseStamped()
+                            self.locked_pose.header.frame_id = 'camera_optical_link'
+                            self.locked_pose.pose.position.x = avg_pos[0]
+                            self.locked_pose.pose.position.y = avg_pos[1]
+                            self.locked_pose.pose.position.z = avg_pos[2]
+                            self.locked_pose.pose.orientation.x = avg_q[0]
+                            self.locked_pose.pose.orientation.y = avg_q[1]
+                            self.locked_pose.pose.orientation.z = avg_q[2]
+                            self.locked_pose.pose.orientation.w = avg_q[3]
+                            
+                            self.board_locked = True
+                            self.get_logger().info(f"✨ Board pose LOCKED after {self.buffer_size} samples")
+                    
+                    # Always publish the locked pose once we have it
+                    if self.board_locked:
+                        self.locked_pose.header.stamp = self.get_clock().now().to_msg()
+                        self.board_pose_pub.publish(self.locked_pose)
+                        self.last_board_pose = self.locked_pose
+                        self.last_detection_time = time.time()
+                        detected.data = True
+                        
+                        if self.detection_count % 30 == 0:
+                            self.get_logger().info(
+                                f"[VisionAruco] Locked board: "
+                                f"pos=({self.locked_pose.pose.position.x:.3f}, "
+                                f"{self.locked_pose.pose.position.y:.3f}, "
+                                f"{self.locked_pose.pose.position.z:.3f})m"
+                            )
+                    
                     self.detection_count += 1
-                    
-                    # Convert rotation vector to matrix then to quaternion
-                    R, _ = cv2.Rodrigues(rvec)
-                    quat = self.rotation_matrix_to_quaternion(R)
-                    
-                    # Create and publish pose message
-                    pose_msg = PoseStamped()
-                    pose_msg.header.stamp = self.get_clock().now().to_msg()
-                    pose_msg.header.frame_id = 'camera_link'
-                    
-                    pose_msg.pose.position.x = float(tvec[0])
-                    pose_msg.pose.position.y = float(tvec[1])
-                    pose_msg.pose.position.z = float(tvec[2])
-                    
-                    pose_msg.pose.orientation.x = quat[0]
-                    pose_msg.pose.orientation.y = quat[1]
-                    pose_msg.pose.orientation.z = quat[2]
-                    pose_msg.pose.orientation.w = quat[3]
-                    
-                    self.board_pose_pub.publish(pose_msg)
-                    self.last_board_pose = pose_msg
-                    self.last_detection_time = time.time()
-                    
-                    if self.detection_count % 30 == 0:
-                        self.get_logger().info(
-                            f"[VisionAruco] Board detected: "
-                            f"pos=({tvec[0][0]:.3f}, {tvec[1][0]:.3f}, {tvec[2][0]:.3f})m"
-                        )
         
         # Use cached pose when detection fails (handles robot occlusion)
         if not detected.data and self.last_board_pose is not None:
@@ -202,7 +244,7 @@ class VisionArucoDetector(Node):
                 # Publish cached pose with updated timestamp
                 cached_msg = PoseStamped()
                 cached_msg.header.stamp = self.get_clock().now().to_msg()
-                cached_msg.header.frame_id = 'camera_link'
+                cached_msg.header.frame_id = 'camera_optical_link'
                 cached_msg.pose = self.last_board_pose.pose
                 self.board_pose_pub.publish(cached_msg)
                 detected.data = True  # Still "detected" via cache

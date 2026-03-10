@@ -111,6 +111,7 @@ class RLEnvironment(Node):
         self.board_detected = False
         self.board_pose: Optional[PoseStamped] = None
         self.workspace_center = np.array([0.0, 0.22, 0.22])  # Default center
+        self.board_transform_util = None  # Initialized in enable_board_tracking
         
         # State readiness flag
         self.data_ready = False
@@ -232,28 +233,47 @@ class RLEnvironment(Node):
         """Enable board-relative workspace for visual_servoing."""
         self.use_board_tracking = True
         
+        # Initialize BoardTransform
+        from rl.board_transform import BoardTransform
+        self.board_transform_util = BoardTransform(self.tf_buffer)
+        
         # Subscribe to board pose
         self.board_sub = self.create_subscription(
             PoseStamped, '/vision/board_pose',
             self._board_callback, 10
         )
         
-        self.get_logger().info("📡 Board tracking enabled - subscribing to /vision/board_pose")
+        self.get_logger().info("Board tracking enabled - subscribing to /vision/board_pose")
     
     def _board_callback(self, msg: PoseStamped):
-        """Update workspace from ArUco board detection."""
-        if not self.board_detected:
-            self.get_logger().info("🎯 ArUco board detected for workspace!")
+        """Build board-to-base_link transform from ArUco detection.
+        
+        Uses BoardTransform to build full 4x4 matrix for converting
+        board-local coordinates to base_link frame.
+        """
+        if self.board_detected:
+            return  # Already locked
+        
+        if self.board_transform_util is None:
+            return
+        
+        success = self.board_transform_util.update_from_pose(msg)
+        
+        if not success:
+            self.get_logger().debug("TF2 not ready for board transform")
+            return
         
         self.board_detected = True
         self.board_pose = msg
         
-        # Update workspace center
-        self.workspace_center = np.array([
-            msg.pose.position.x,
-            msg.pose.position.y,
-            msg.pose.position.z
-        ])
+        # Get board center in base_link
+        center = self.board_transform_util.get_board_center_base()
+        self.workspace_center = center
+        
+        self.get_logger().info(
+            f"Board LOCKED (board->base_link transform ready)\n"
+            f"   Center at base_link: [{center[0]:.3f}, {center[1]:.3f}, {center[2]:.3f}]"
+        )
     
     def wait_for_initial_detection(self, timeout=10.0):
         """Wait for initial board detection (visual_servoing mode)."""
@@ -443,21 +463,29 @@ class RLEnvironment(Node):
         """Randomize target sphere position within 3D workspace."""
         
         if self.use_board_tracking and self.board_detected:
-            # BOARD-RELATIVE: Generate target relative to detected board
-            # Workspace is 6cm radius around board in X,Z
-            WORKSPACE_RADIUS = 0.03  # ±3cm from board center
+            # BOARD-RELATIVE: Generate random point ON the board surface
+            # Using board-local 2D coords, then transform to base_link
+            WORKSPACE_RADIUS = 0.08  # 8cm from board center
             
+            # Random point in board-local 2D
             offset_x = random.uniform(-WORKSPACE_RADIUS, WORKSPACE_RADIUS)
-            offset_z = random.uniform(0.0, 0.05)  # 0-5cm above board
+            offset_y = random.uniform(-WORKSPACE_RADIUS, WORKSPACE_RADIUS)
             
-            self.target_x = self.workspace_center[0] + offset_x
-            # SAFETY: 5mm in front of board (towards camera) to prevent collision
-            BOARD_SAFETY_MARGIN = 0.005
-            self.target_y = self.workspace_center[1] + BOARD_SAFETY_MARGIN
-            self.target_z = self.workspace_center[2] + offset_z
+            if self.board_transform_util is not None and self.board_transform_util.locked:
+                # Transform board-local point to base_link
+                board_pt = np.array([[offset_x, offset_y, 0.0, 1.0]])
+                base_pt = self.board_transform_util.board_to_base(board_pt)[0]
+                self.target_x = base_pt[0]
+                self.target_y = base_pt[1]
+                self.target_z = base_pt[2]
+            else:
+                # Fallback: use workspace center with offsets
+                self.target_x = self.workspace_center[0] + offset_x
+                self.target_y = self.workspace_center[1]
+                self.target_z = self.workspace_center[2] + offset_y
             
             self.get_logger().info(
-                f"   Target (board-relative): X={self.target_x:.3f}, "
+                f"   Target (on board): X={self.target_x:.3f}, "
                 f"Y={self.target_y:.3f}, Z={self.target_z:.3f}")
         else:
             # STATIC WORKSPACE: Use fixed bounds (robot_arm2 compatibility)
@@ -536,6 +564,10 @@ class RLEnvironment(Node):
             home_position = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
             self._move_to_joint_positions(home_position, duration=1.0)
             time.sleep(0.5)  # Wait for recovery
+        
+        # NOTE: Board is collision-free (transparent) for clean RL training
+        # We keep sparse rewards (0/-1) matching the old robot_arm2 project
+        # The board's position is used only for target generation, not penalties
         
         # Check episode termination
         if self.current_step >= self.max_episode_steps:

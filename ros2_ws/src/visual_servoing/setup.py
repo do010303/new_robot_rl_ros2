@@ -39,7 +39,13 @@ def get_mesh_files():
 setup(
     name=package_name,
     version='0.0.0',
-    packages=find_packages(exclude=['test']),
+    packages=find_packages(exclude=['test']) + ['drawing', 'rl', 'utils', 'agents'],
+    package_dir={
+        'drawing': 'scripts/drawing',
+        'rl': 'scripts/rl',
+        'utils': 'scripts/utils',
+        'agents': 'scripts/agents',
+    },
     data_files=[
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
@@ -71,6 +77,7 @@ setup(
             'drawing_executor = vs_lib.nodes.drawing_executor_ros2:main',
             'shape_generator = vs_lib.nodes.shape_generator:main',
             'vision_node = vs_lib.nodes.vision_node_ros2:main',
+            'gazebo_drawing_visualizer = drawing.gazebo_visualizer:main',
         ],
     },
 )

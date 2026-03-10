@@ -147,6 +147,19 @@ def generate_launch_description():
         output='screen'
     )
 
+    # Gazebo Drawing Visualizer (spawns shapes + pen lines in Gazebo)
+    gazebo_drawing_visualizer = TimerAction(
+        period=10.0,  # Wait for Gazebo + vision to be ready
+        actions=[
+            Node(
+                package='visual_servoing',
+                executable='gazebo_drawing_visualizer',
+                name='gazebo_drawing_visualizer',
+                output='screen'
+            )
+        ]
+    )
+
     return LaunchDescription([
         set_gz_resource_path,
         robot_state_publisher_node,
@@ -156,4 +169,5 @@ def generate_launch_description():
         joint_state_broadcaster_spawner,
         arm_controller_spawner,
         vision_detector,
+        gazebo_drawing_visualizer,
     ])
