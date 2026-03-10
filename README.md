@@ -3,7 +3,7 @@
 A ROS2-based system for training a **6-DOF robotic manipulator** to perform precise operations (target reaching & shape drawing) using **Soft Actor-Critic (SAC)** reinforcement learning, with an optional **Neural Predictive Inverse Kinematics** module. Includes a full **Sim-to-Real pipeline** for deploying trained models onto a Raspberry Pi 4.
 
 ![ROS2 Humble](https://img.shields.io/badge/ROS2-Humble-blue)
-![Gazebo](https://img.shields.io/badge/Gazebo-Fortress-orange)
+![Gazebo](https://img.shields.io/badge/Gazebo-Harmonic-orange)
 ![Ubuntu](https://img.shields.io/badge/Ubuntu-22.04-purple)
 ![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-red)
 
@@ -50,7 +50,7 @@ This project implements:
 
 ```
 ┌────────────────────────────────────────────────────────────┐
-│                    Gazebo Fortress Sim                      │
+│                   Gazebo Harmonic Sim                       │
 │  ┌──────────┐  ┌──────────────┐  ┌───────────────────────┐ │
 │  │ 6-DOF Arm│  │ Target Sphere│  │ Drawing Surface +     │ │
 │  │ (URDF)   │  │ / Shape      │  │ ArUco Markers + Camera│ │
@@ -85,41 +85,81 @@ This project implements:
 |---|---|
 | Ubuntu | 22.04 LTS |
 | ROS2 | Humble Hawksbill |
-| Gazebo | Fortress (Ignition) |
+| Gazebo | **Harmonic** (gz-sim 8) |
 | Python | 3.10+ |
 | PyTorch | 2.0+ |
+
+> **Note**: This project was upgraded from Gazebo Fortress to **Gazebo Harmonic**. ROS2 Humble does not ship pre-built packages for Harmonic, so `ros_gz` and `gz_ros2_control` must be built from source (see Step 2 below).
 
 ---
 
 ## Installation
 
-### 1. Install ROS2 Humble & Gazebo
+### 1. Install ROS2 Humble & Gazebo Harmonic
 
 ```bash
 # ROS2 Humble
 sudo apt update && sudo apt install ros-humble-desktop-full
 
-# Gazebo bridge & controllers
-sudo apt install ros-humble-ros-gz ros-humble-gz-ros2-control
+# ROS2 control framework
 sudo apt install ros-humble-ros2-control ros-humble-ros2-controllers
 sudo apt install ros-humble-xacro python3-colcon-common-extensions
+
+# Install Gazebo Harmonic
+sudo apt-get install curl lsb-release gnupg
+sudo curl https://packages.osrfoundation.org/gazebo.gpg \
+  --output /usr/share/keyrings/pkgs-osrf-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/pkgs-osrf-archive-keyring.gpg] \
+  http://packages.osrfoundation.org/gazebo/ubuntu-stable $(lsb_release -cs) main" | \
+  sudo tee /etc/apt/sources.list.d/gazebo-stable.list > /dev/null
+sudo apt-get update
+sudo apt-get install gz-harmonic
 ```
 
-### 2. Install Python Dependencies
+### 2. Build `ros_gz` and `gz_ros2_control` from Source
+
+Since ROS2 Humble has no pre-built packages for Gazebo Harmonic, these must be built from source:
 
 ```bash
-pip install torch numpy matplotlib pandas opencv-contrib-python
+# Remove any existing Fortress-era packages
+sudo apt remove -y ros-humble-ros-gz* ros-humble-ros-ign* 2>/dev/null
+sudo apt remove -y ros-humble-ign-ros2-control ros-humble-gz-ros2-control 2>/dev/null
+
+cd ~/new_rl_ros2/ros2_ws/src
+
+# Clone ros_gz (Humble branch)
+git clone -b humble https://github.com/gazebosim/ros_gz.git
+
+# Clone gz_ros2_control (Humble branch)
+git clone -b humble https://github.com/ros-controls/gz_ros2_control.git
+
+# Install rosdep dependencies (some may fail for gz-transport13 — that's OK)
+rosdep install --from-paths . --ignore-src -r -y 2>/dev/null || true
+
+# Build with GZ_VERSION=harmonic (use sequential build to avoid OOM on low-RAM systems)
+cd ~/new_rl_ros2/ros2_ws
+source /opt/ros/humble/setup.bash
+export GZ_VERSION=harmonic
+MAKEFLAGS="-j2" colcon build --executor sequential
+source install/setup.bash
 ```
 
-### 3. Clone & Build
+> ⚠️ **Low RAM (≤8GB)?** Use `MAKEFLAGS="-j1"` to avoid out-of-memory crashes during build.
+
+### 3. Install Python Dependencies
+
+```bash
+pip install torch numpy matplotlib pandas opencv-contrib-python scipy
+```
+
+### 4. Clone & Build Project Packages
 
 ```bash
 git clone https://github.com/EmNetLab411/new_rl_ros2.git
 cd new_rl_ros2/ros2_ws
 
 source /opt/ros/humble/setup.bash
-colcon build --packages-select robot_arm2
-colcon build --packages-select visual_servoing
+colcon build --packages-select robot_arm2 visual_servoing
 source install/setup.bash
 ```
 
@@ -361,6 +401,9 @@ scripts/training_results/
 | Issue | Solution |
 |---|---|
 | **Gazebo won't open** | Run both `source /opt/ros/humble/setup.bash` and `source install/setup.bash` |
+| **`gz_ros2_control` plugin not found** | Rebuild from source with `GZ_VERSION=harmonic` (see Installation Step 2) |
+| **Build crashes (OOM)** | Use `MAKEFLAGS="-j1" colcon build --executor sequential` |
+| **Clock skew warnings** | Fix with `sudo timedatectl set-local-rtc 1 --adjust-system-clock` (common on dual-boot) |
 | **Robot not moving** | Check controllers: `ros2 control list_controllers` — should show `joint_state_broadcaster [active]` and `arm_controller [active]` |
 | **"Neural IK not found"** | Train Neural IK first using menu option **4** |
 | **Camera not showing** | Rebuild visual_servoing: `colcon build --packages-select visual_servoing` |
