@@ -36,6 +36,20 @@ def get_mesh_files():
             mesh_files.append((target_dir, file_paths))
     return mesh_files
 
+# Recursive URDF installation
+def get_urdf_files():
+    urdf_files = []
+    for root, dirs, files in os.walk('urdf'):
+        if files:
+            rel_path = os.path.relpath(root, 'urdf')
+            if rel_path == '.':
+                target_dir = os.path.join('share', package_name, 'urdf')
+            else:
+                target_dir = os.path.join('share', package_name, 'urdf', rel_path)
+            file_paths = [os.path.join(root, f) for f in files]
+            urdf_files.append((target_dir, file_paths))
+    return urdf_files
+
 setup(
     name=package_name,
     version='0.0.0',
@@ -52,13 +66,11 @@ setup(
         ('share/' + package_name, ['package.xml']),
         # Install launch files
         (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
-        # Install URDF files
-        (os.path.join('share', package_name, 'urdf'), glob('urdf/*.xacro')),
         # Install world files
         (os.path.join('share', package_name, 'worlds'), glob('worlds/*.world')),
         # Install config files
         (os.path.join('share', package_name, 'config'), glob('config/*')),
-    ] + get_model_files() + get_mesh_files(),  # Install models and meshes recursively
+    ] + get_model_files() + get_mesh_files() + get_urdf_files(),  # Install models, meshes, and URDFs recursively
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='ducanh',
@@ -78,6 +90,7 @@ setup(
             'shape_generator = vs_lib.nodes.shape_generator:main',
             'vision_node = vs_lib.nodes.vision_node_ros2:main',
             'gazebo_drawing_visualizer = drawing.gazebo_visualizer:main',
+            'fk_display = rl.fk_display:main',
         ],
     },
 )

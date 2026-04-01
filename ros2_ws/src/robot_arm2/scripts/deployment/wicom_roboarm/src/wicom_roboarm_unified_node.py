@@ -153,7 +153,7 @@ class UnifiedRoboArmNode(Node):
         self.declare_parameter("oscillator_hz", 25_000_000)
         self.declare_parameter("pwm_frequency_hz", 50.0)
         self.declare_parameter("enable_on_start", False)
-        self.declare_parameter("use_mux", True)
+        self.declare_parameter("use_mux", False)
 
         # UPDATED: use pulse min/max like test1servo.py
         self.declare_parameter("pulse_us_min", 500.0)

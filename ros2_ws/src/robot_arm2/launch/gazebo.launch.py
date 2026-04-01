@@ -6,6 +6,7 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import Command, FindExecutable, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+from launch_ros.parameter_descriptions import ParameterValue
 
 def generate_launch_description():
     
@@ -18,12 +19,13 @@ def generate_launch_description():
                 [
                     FindPackageShare("robot_arm2"),
                     "urdf",
-                    "New.xacro",
+                    "new_arm",
+                    "new_arm.xacro",
                 ]
             ),
         ]
     )
-    robot_description = {"robot_description": robot_description_content}
+    robot_description = {"robot_description": ParameterValue(robot_description_content, value_type=str)}
 
     # Robot State Publisher
     robot_state_publisher_node = Node(

@@ -1,10 +1,11 @@
 robot:
   # All dimensions, offsets, and limits are in CENTIMETERS (cm)
+  # Derived straight-line kinematic lengths from UAV `new_arm.xacro`
   dimensions:  # Units: cm
-    L0: 11.5
-    L1: 11.5
+    L0: 5.4
+    L1: 15.5
     L2: 14.0
-    L3: 13.5
+    L3: 8.4
   offsets: 
     J3: 20.0  # Units: degrees
     J4: 20.0  # Units: degrees

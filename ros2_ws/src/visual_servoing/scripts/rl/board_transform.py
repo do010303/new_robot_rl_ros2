@@ -84,14 +84,14 @@ class BoardTransform:
         board_center_base = T_full[:3, 3]  # Translation = board origin in base_link
         
         # Build CLEAN T_combined using only the detected position
-        # but with an IDEAL rotation for the known board orientation:
-        #   Board X → base_link +X  (left/right)
-        #   Board Y → base_link -Z  (up on board = down in flipped base_link)
-        #   Board Z → base_link +Y  (out of board = toward camera)
+        # but with an IDEAL rotation for a VERTICAL board placed in front of the drone:
+        #   Board X (right/left on face) → base_link -Y (since +Y is left)
+        #   Board Y (up/down on face) → base_link +Z (up)
+        #   Board Z (out of board) → base_link -X (towards drone)
         R_ideal = np.array([
-            [ 1,  0,  0],   # board X → base X
-            [ 0,  0,  1],   # board Z → base Y (depth toward camera)
-            [ 0, -1,  0],   # board Y → base -Z (up on board)
+            [ 0,  0, -1],   # board Z → base -X 
+            [-1,  0,  0],   # board X → base -Y 
+            [ 0,  1,  0],   # board Y → base +Z 
         ], dtype=np.float64)
         
         self.T_combined = np.eye(4)

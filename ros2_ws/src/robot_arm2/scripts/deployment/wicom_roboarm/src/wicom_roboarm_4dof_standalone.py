@@ -147,7 +147,7 @@ class RoboArm4DOFStandalone(Node):
         self.declare_parameter("oscillator_hz", 25_000_000)
         self.declare_parameter("pwm_frequency_hz", 50.0)
 
-        self.declare_parameter("use_mux", True)
+        self.declare_parameter("use_mux", False)
         self.declare_parameter("mux_address", 0x70)
         self.declare_parameter("mux_channel", 2)
 

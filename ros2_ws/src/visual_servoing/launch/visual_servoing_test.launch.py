@@ -43,7 +43,8 @@ def generate_launch_description():
                 [
                     FindPackageShare("visual_servoing"),
                     "urdf",
-                    "New_flipped.xacro",  # Use flipped robot!
+                    "new_arm",
+                    "new_arm.xacro",
                 ]
             ),
         ]
@@ -57,7 +58,7 @@ def generate_launch_description():
         executable='robot_state_publisher',
         name='robot_state_publisher',
         output='screen',
-        parameters=[robot_description]
+        parameters=[robot_description, {'use_sim_time': True}]
     )
 
     # Gazebo Fortress with visual servoing world
@@ -94,8 +95,10 @@ def generate_launch_description():
     )
 
     # Joint State Broadcaster Spawner
+    # NOTE: Delay must be long enough for gz_ros2_control plugin to fully
+    # initialize the controller_manager. Too short = broadcaster stays inactive.
     joint_state_broadcaster_spawner = TimerAction(
-        period=3.0,
+        period=8.0,
         actions=[
             Node(
                 package='controller_manager',
@@ -108,7 +111,7 @@ def generate_launch_description():
 
     # Arm Controller Spawner
     arm_controller_spawner = TimerAction(
-        period=5.0,
+        period=12.0,
         actions=[
             Node(
                 package='controller_manager',
@@ -130,7 +133,8 @@ def generate_launch_description():
                 output='screen',
                 parameters=[{
                     'image_topic': '/camera/image_raw',
-                    'show_gui': False
+                    'show_gui': False,
+                    'use_sim_time': True
                 }]
             )
         ]
@@ -155,7 +159,8 @@ def generate_launch_description():
                 package='visual_servoing',
                 executable='gazebo_drawing_visualizer',
                 name='gazebo_drawing_visualizer',
-                output='screen'
+                output='screen',
+                parameters=[{'use_sim_time': True}]
             )
         ]
     )

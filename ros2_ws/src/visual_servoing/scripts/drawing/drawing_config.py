@@ -35,13 +35,14 @@ else:
 # Square size (side length in meters)
 SHAPE_SIZE = 0.10  # 10cm sides requested by user
 
-# Y-plane (drawing surface - set dynamically by ArUco detection)
-Y_PLANE = -0.27  # Default ~-0.27m (updated from board detection)
+# X-plane (drawing surface - set dynamically by ArUco detection)
+X_PLANE = 0.50  # Default ~0.50m (forward from UAV base)
 USE_DYNAMIC_WORKSPACE = True  # Enable dynamic centering on detected board
 
 # Shape center position - set dynamically from board detection
 # Default fallback if no board detected
-TRIANGLE_CENTER = (0.0, -0.27, 0.25)  # X=0, Y=-0.27m, Z=0.25m
+# X=0.5 (forward), Y=0.0m (center), Z=0.35m (height of the vertical board)
+TRIANGLE_CENTER = (0.50, 0.0, 0.35)  
 
 # Workspace radius (safe drawing area from center)
 WORKSPACE_RADIUS = 0.07  # 7cm radius (14cm diameter) to fit 10cm shape

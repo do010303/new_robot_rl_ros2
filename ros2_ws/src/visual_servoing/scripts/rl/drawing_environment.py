@@ -45,7 +45,7 @@ class DrawingEnvironment(RLEnvironment):
                  waypoint_tolerance=0.01,
                  shape_type='triangle',
                  shape_size=0.06,
-                 y_plane=-0.27,
+                 x_plane=0.50,
                  randomize_shape=False,
                  use_dynamic_workspace=True):
         """
@@ -56,7 +56,7 @@ class DrawingEnvironment(RLEnvironment):
             waypoint_tolerance: Distance to consider waypoint reached (1cm)
             shape_type: 'triangle', 'square', 'line', or 'random_triangle'
             shape_size: Size of shape in meters (default 6cm)
-            y_plane: Default Y coordinate (overridden by board detection)
+            x_plane: Default X coordinate (overridden by board detection)
             randomize_shape: Whether to randomize shape position each episode
             use_dynamic_workspace: Enable ArUco board detection for workspace
         """
@@ -73,7 +73,8 @@ class DrawingEnvironment(RLEnvironment):
         # Board-local transform pipeline
         self.board_detected = False
         self.board_pose: Optional[PoseStamped] = None
-        self.dynamic_workspace_center = np.array([0.0, y_plane, 0.25])
+        # Use the x_plane parameter for the default forward distance, Y=0 (center line)
+        self.dynamic_workspace_center = np.array([x_plane, 0.0, 0.35])
         
         # TF2 for board transform
         self.drawing_tf_buffer = tf2_ros.Buffer()
@@ -116,17 +117,17 @@ class DrawingEnvironment(RLEnvironment):
         # [joints(6), EE(3), target(3), dist(3), dist3d(1), progress(1), remaining(1)]
         self.observation_space = spaces.Box(
             low=np.array(
-                [-np.pi/2]*6 +              # joint positions
-                [-0.15, -0.40, 0.10] +      # EE position (-Y workspace)
-                [-0.15, -0.40, 0.10] +      # target position (-Y workspace)
-                [-1.0]*3 +                   # distance components
+                [-3.14159, -1.04719, -3.14159, -3.14159, -1.57079, -3.14159] +              # joint positions
+                [0.20, -0.30, 0.0] +      # EE position (+X workspace)
+                [0.20, -0.30, 0.0] +      # target position (+X workspace)
+                [-0.60]*3 +                   # distance components
                 [0.0, 0.0, 0.0]             # dist3d, progress, remaining
             ),
             high=np.array(
-                [np.pi/2]*6 +               # joint positions
-                [0.15, -0.10, 0.40] +       # EE position (-Y workspace)
-                [0.15, -0.10, 0.40] +       # target position (-Y workspace)
-                [1.0]*3 +                    # distance components
+                [3.14159, 1.57079, 3.14159, 3.14159, 1.57079, 3.14159] +               # joint positions
+                [0.80, 0.40, 0.60] +       # EE position (+X workspace)
+                [0.80, 0.40, 0.60] +       # target position (+X workspace)
+                [0.60]*3 +                    # distance components
                 [1.0, 1.0, 30.0]            # dist3d, progress, remaining
             ),
             dtype=np.float32

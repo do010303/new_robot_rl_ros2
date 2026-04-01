@@ -12,6 +12,7 @@ This provides:
 
 import rclpy
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from rclpy.action import ActionClient
 from rclpy.duration import Duration
 import numpy as np
@@ -85,7 +86,9 @@ class RLEnvironment(Node):
             max_episode_steps: Maximum steps per episode (default: 200)
             goal_tolerance: Distance threshold for goal achievement (default: 1cm = sphere radius)
         """
-        super().__init__('rl_environment')
+        super().__init__('rl_environment', parameter_overrides=[
+            rclpy.parameter.Parameter('use_sim_time', rclpy.parameter.Parameter.Type.BOOL, True)
+        ])
         
         self.get_logger().info("🤖 Initializing RL Environment for 6-DOF Robot...")
         
@@ -116,12 +119,12 @@ class RLEnvironment(Node):
         # State readiness flag
         self.data_ready = False
         
-        # Joint limits: All joints ±90° with home at 0°
+        # Joint limits for drone 6-DOF arm (from new_arm.xacro)
         self.joint_limits_low = np.array([
-            -np.pi/2, -np.pi/2, -np.pi/2, -np.pi/2, -np.pi/2, -np.pi/2
+            -3.14159, -1.04719, -3.14159, -3.14159, -1.57079, -3.14159
         ])
         self.joint_limits_high = np.array([
-            np.pi/2, np.pi/2, np.pi/2, np.pi/2, np.pi/2, np.pi/2
+            3.14159, 1.57079, 3.14159, 3.14159, 1.57079, 3.14159
         ])
         
         # IK success tracking (legacy, not used with direct joint control)
@@ -138,23 +141,23 @@ class RLEnvironment(Node):
         # [joints(6), robot_xyz(3), target_xyz(3), dist_xyz(3), dist_3d(1)]
         self.observation_space = spaces.Box(
             low=np.array([
-                -np.pi/2, -np.pi/2, -np.pi/2, -np.pi/2, -np.pi/2, -np.pi/2,  # joint limits min
-                -0.30, -0.50, 0.0,                                  # robot_xyz min
-                -0.30, -0.50, 0.0,                                  # target_xyz min
+                -3.14159, -3.14159, -3.14159, -3.14159, -3.14159, -3.14159,  # joint limits min
+                0.20, -0.30, 0.0,                                  # robot_xyz min (X=0.2 to 0.8)
+                0.20, -0.30, 0.0,                                  # target_xyz min
                 -0.60, -0.60, -0.60,                                # dist_xyz min
                 0.0                                                  # dist_3d min
             ]),
             high=np.array([
-                np.pi/2, np.pi/2, np.pi/2, np.pi/2, np.pi/2, np.pi/2,  # joint limits max
-                0.30, 0.0, 0.50,                                    # robot_xyz max
-                0.30, 0.0, 0.50,                                    # target_xyz max
+                3.14159, 3.14159, 3.14159, 3.14159, 3.14159, 3.14159,  # joint limits max
+                0.80, 0.30, 0.60,                                    # robot_xyz max
+                0.80, 0.30, 0.60,                                    # target_xyz max
                 0.60, 0.60, 0.60,                                    # dist_xyz max
                 1.0                                                  # dist_3d max
             ]),
             dtype=np.float32
         )
         
-        self.get_logger().info(f"📊 Action space: 6D absolute joint angles (±90°)")
+        self.get_logger().info(f"📊 Action space: 6D absolute joint angles (±180°)")
         self.get_logger().info(f"📊 Observation space: 16D state")
         
         # Target sphere state (static sphere in world file)
@@ -300,7 +303,7 @@ class RLEnvironment(Node):
     
     def _joint_state_callback(self, msg: JointState):
         """Update joint positions and velocities for 6-DOF robot"""
-        joint_names = ['Joint 1', 'Joint 2', 'Joint 3', 'Joint 4', 'Joint 5', 'Joint 6']
+        joint_names = ['Revolute 20', 'Revolute 22', 'Revolute 23', 'Revolute 26', 'Revolute 28', 'Revolute 30']
         positions = [0.0] * 6
         velocities = [0.0] * 6
         found_all = True
@@ -344,50 +347,39 @@ class RLEnvironment(Node):
     
     def _update_end_effector_position(self):
         """
-        Update end-effector position using TF2
+        Update end-effector position using TF2, with FK fallback.
         
-        Reads transform from base_link to End-effector_1 (pen tip)
-        Uses short timeout since transform should be immediately available
+        Reads transform from base_link to bibut_1 (pen tip).
+        Falls back to FK calculation if TF is unavailable (e.g. sim-time mismatch).
         """
+        tf_ok = False
         try:
-            # Look up transform with short timeout (transform is always available)
+            # Use Time(seconds=0) to always get the LATEST transform regardless of clock
             transform = self.tf_buffer.lookup_transform(
                 'base_link',
-                'End-effector_1',
-                rclpy.time.Time(),  # Get latest
-                timeout=rclpy.duration.Duration(seconds=0, nanoseconds=100000000)  # 0.1s timeout
+                'bibut_1',
+                rclpy.time.Time(seconds=0),
+                timeout=rclpy.duration.Duration(seconds=0, nanoseconds=50000000)  # 50ms
             )
             
-            # Extract position from TF
             self.robot_x = transform.transform.translation.x
             self.robot_y = transform.transform.translation.y
             self.robot_z = transform.transform.translation.z
+            tf_ok = True
             
-            # DEBUG: Compare with FK calculation
+        except Exception as e:
+            # TF failed — fall back to FK calculation
             try:
                 from rl.fk_ik_utils import fk
                 fk_pos = fk(self.joint_positions)
-                diff = np.sqrt(
-                    (fk_pos[0] - self.robot_x)**2 +
-                    (fk_pos[1] - self.robot_y)**2 +
-                    (fk_pos[2] - self.robot_z)**2
+                self.robot_x = fk_pos[0]
+                self.robot_y = fk_pos[1]
+                self.robot_z = fk_pos[2]
+            except Exception as fk_err:
+                self.get_logger().warn(
+                    f"Both TF and FK failed: TF={e}, FK={fk_err}",
+                    throttle_duration_sec=5.0
                 )
-                if diff > 0.01:  # Log only if difference > 1cm
-                    self.get_logger().warn(
-                        f"FK vs TF diff: {diff*100:.2f}cm | "
-                        f"FK=({fk_pos[0]:.3f},{fk_pos[1]:.3f},{fk_pos[2]:.3f}) | "
-                        f"TF=({self.robot_x:.3f},{self.robot_y:.3f},{self.robot_z:.3f})",
-                        throttle_duration_sec=2.0
-                    )
-            except Exception as fk_error:
-                self.get_logger().debug(f"FK debug error: {fk_error}", throttle_duration_sec=10.0)
-            
-        except Exception as e:
-            # TF not available - log occasionally
-            self.get_logger().warn(
-                f"TF lookup failed: {e}",
-                throttle_duration_sec=5.0
-            )
     
     # NOTE: Target sphere spawning is now handled by target_manager.py node
     # This node uses Ignition Transport to spawn and teleport the visual sphere
@@ -552,13 +544,15 @@ class RLEnvironment(Node):
         dist_after = next_state[15]  # dist_3d
         reward, done = self._calculate_reward(dist_after, dist_before)
         
-        # Check for ground collision (Z <= 5cm) - SAFETY FEATURE
-        # Heavy penalty to prevent robot from breaking by hitting ground
-        GROUND_SAFETY_Z = 0.01  # 1cm - anything below this is dangerous
+        # Check for ground collision (Z <= -49cm) - SAFETY FEATURE
+        # Base is elevated at +0.5m, so ground is at -0.5m in base_link frame
+        GROUND_SAFETY_Z = -0.49  # 1cm above ground
         if self.robot_z <= GROUND_SAFETY_Z:
             reward = -50.0  # Heavy penalty for dangerous position
             done = True
-            self.get_logger().warn(f"⚠️ DANGER! Robot too low! Z={self.robot_z*100:.1f}cm <= {GROUND_SAFETY_Z*100:.0f}cm")
+            # Convert back to world coordinates for the log message (add 0.5)
+            world_z = self.robot_z + 0.5
+            self.get_logger().warn(f"⚠️ DANGER! Robot too low! World Z={world_z*100:.1f}cm <= 1cm (Rel Z={self.robot_z*100:.1f}cm)")
             self.get_logger().warn(f"   Heavy penalty applied (-50) - Resetting to home...")
             # AUTO-RESET: Move robot to home position to prevent damage
             home_position = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
@@ -616,7 +610,7 @@ class RLEnvironment(Node):
         
         # Create trajectory goal
         goal_msg = FollowJointTrajectory.Goal()
-        goal_msg.trajectory.joint_names = ['Joint 1', 'Joint 2', 'Joint 3', 'Joint 4', 'Joint 5', 'Joint 6']
+        goal_msg.trajectory.joint_names = ['Revolute 20', 'Revolute 22', 'Revolute 23', 'Revolute 26', 'Revolute 28', 'Revolute 30']
         
         # Create trajectory point
         point = JointTrajectoryPoint()

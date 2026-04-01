@@ -18,7 +18,7 @@ def generate_launch_description():
             {
                 "i2c_bus": 1,
                 "i2c_address": "0x40",
-                "use_mux": True,
+                "use_mux": False,
                 "mux_address": "0x70",
                 "mux_channel": 2,
 

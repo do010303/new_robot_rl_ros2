@@ -1287,19 +1287,21 @@ def manual_control_mode():
                 
                 # Wait for settling (Longer wait for manual verification)
                 print("⏳ Settling...")
-                for _ in range(20): # 2.0 seconds
+                time.sleep(1.5)  # Let robot fully reach target
+                for _ in range(30): # Spin to update TF/joint states
                     rclpy.spin_once(env, timeout_sec=0.1)
                 
-                # Show RESULTING state
-                if next_state is not None:
-                     final_ee = next_state[6:9]
+                # Re-read state AFTER settling (not mid-trajectory)
+                settled_state = env.get_state()
+                if settled_state is not None:
+                     final_ee = settled_state[6:9]
                      dist_err = np.linalg.norm(final_ee - target_fk)
                      print(f"📍 Resulting EE:     ({final_ee[0]:.4f}, {final_ee[1]:.4f}, {final_ee[2]:.4f})")
-                     print(f"📏 Error (FK vs Res): {dist_err*100:.2f} cm")
+                     print(f"📏 Error (FK vs TF): {dist_err*100:.2f} cm")
                      if dist_err > 0.02:
                          print("⚠️  Large discrepancy! Check physics/collisions/limits.")
-                
-                time.sleep(0.5)
+                     else:
+                         print("✅ FK matches TF2!")
                 
                 # Publish pen position if drawing enabled
                 if drawing_enabled:

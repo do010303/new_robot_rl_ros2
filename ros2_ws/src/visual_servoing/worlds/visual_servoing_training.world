@@ -76,54 +76,47 @@
     </model>
 
     <!-- 4 ArUco Markers on drawing surface (120mm x 120mm grid) -->
-    <!-- Board: 200x200mm at Y=-0.27 (center), rotated 90° on X -->
-    <!-- Marker model: 20x2x20mm (XYZ), so thickness in Y=2mm -->
-    <!-- Board back at Y=-0.27-0.0005=-0.2705, front at Y=-0.27+0.0005=-0.2695 -->
-    <!-- Markers placed at Y=-0.269 (board surface + 1mm for visibility) -->
-    
-    <!-- Grid: markers at corners of 96mm spacing (120mm - 20mm marker size - 4mm gap) -->
-    <!-- Center at Z=0.352, so: -->
-    <!-- Top Z = 0.352 + 0.048 = 0.400 -->
-    <!-- Bottom Z = 0.352 - 0.048 = 0.304 -->
-    <!-- Left X = -0.048, Right X = +0.048 -->
+    <!-- Board: 200x200mm at X=0.5 (center). Markers rotated to face drone (-X) -->
+    <!-- Original markers face +/- Y natively. To face -X, rotate yaw by 90 deg (1.5708) -->
     
     <!-- Marker 0 - Top Left -->
     <include>
       <uri>model://aruco_marker_0</uri>
       <name>marker_0</name>
-      <pose>-0.048 -0.269 0.400 0 0 0</pose>
+      <pose>0.5 0.048 0.400 0 0 1.5708</pose>
     </include>
     
     <!-- Marker 1 - Top Right -->
     <include>
       <uri>model://aruco_marker_1</uri>
       <name>marker_1</name>
-      <pose>0.048 -0.269 0.400 0 0 0</pose>
+      <pose>0.5 -0.048 0.400 0 0 1.5708</pose>
     </include>
     
     <!-- Marker 2 - Bottom Right -->
     <include>
       <uri>model://aruco_marker_2</uri>
       <name>marker_2</name>
-      <pose>0.048 -0.269 0.304 0 0 0</pose>
+      <pose>0.5 -0.048 0.304 0 0 1.5708</pose>
     </include>
     
     <!-- Marker 3 - Bottom Left -->
     <include>
       <uri>model://aruco_marker_3</uri>
       <name>marker_3</name>
-      <pose>-0.048 -0.269 0.304 0 0 0</pose>
+      <pose>0.5 0.048 0.304 0 0 1.5708</pose>
     </include>
 
     <!-- Drawing Surface Board - Behind markers as background -->
     <model name="drawing_surface">
       <static>true</static>
-      <pose>0 -0.27 0.352 1.5708 0 0</pose> <!-- Behind markers at Y=-0.27 -->
+      <!-- Placed exactly behind markers X=0.51 -> slightly further away to not clip -->
+      <pose>0.51 0.0 0.352 1.5708 0 1.5708</pose> 
       <link name="surface_link">
         <visual name="surface_visual">
           <geometry>
             <box>
-              <size>0.20 0.20 0.001</size> <!-- 200mm x 200mm x 1mm (thinner) -->
+              <size>0.20 0.20 0.001</size>
             </box>
           </geometry>
           <material>

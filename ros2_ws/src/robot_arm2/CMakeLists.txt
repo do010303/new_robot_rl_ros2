@@ -32,6 +32,10 @@ install(PROGRAMS
   scripts/target_manager.py
   scripts/drawing/line_visualizer.py
   scripts/drawing/gazebo_visualizer.py
+  scripts/digital_twin/gazebo_state_mirror.py
+  scripts/digital_twin/gazebo_to_real_mirror.py
+  scripts/digital_twin/test_ros2_connection.py
+  scripts/digital_twin/test_ros2_connection_pi.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
