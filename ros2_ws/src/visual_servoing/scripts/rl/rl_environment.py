@@ -457,7 +457,7 @@ class RLEnvironment(Node):
         if self.use_board_tracking and self.board_detected:
             # BOARD-RELATIVE: Generate random point ON the board surface
             # Using board-local 2D coords, then transform to base_link
-            WORKSPACE_RADIUS = 0.08  # 8cm from board center
+            WORKSPACE_RADIUS = 0.06  # 6cm from board center (12x12cm board)
             
             # Random point in board-local 2D
             offset_x = random.uniform(-WORKSPACE_RADIUS, WORKSPACE_RADIUS)

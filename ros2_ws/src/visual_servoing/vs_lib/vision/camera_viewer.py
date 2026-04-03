@@ -8,11 +8,18 @@ Visualizes:
 - Drawing pen trajectory (purple line)
 """
 
+import os
+
+# Suppress C++ TF_OLD_DATA warnings from buffer_core.cpp
+# These are caused by Gazebo sim-time clock mismatches and are harmless
+os.environ['TF2_CPP_LOGGING_LEVEL'] = 'ERROR'
+
 import rclpy
 from rclpy.node import Node
 import cv2
 import numpy as np
 import time
+import logging
 from sensor_msgs.msg import Image, CameraInfo
 from geometry_msgs.msg import PoseStamped, Point, PointStamped
 from std_msgs.msg import Bool, Float32MultiArray
@@ -32,6 +39,10 @@ class CameraViewer(Node):
         # TF2 for coordinate transform
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+        
+        # Suppress TF2 C++ warnings (TF_OLD_DATA from sim-time clock mismatch)
+        tf2_logger = logging.getLogger('tf2_ros')
+        tf2_logger.setLevel(logging.ERROR)
         
         # Camera intrinsics
         self.camera_matrix = None
@@ -194,7 +205,7 @@ class CameraViewer(Node):
             try:
                 transform = self.tf_buffer.lookup_transform(
                     'base_link', self.board_pose.header.frame_id,
-                    rclpy.time.Time(), timeout=Duration(seconds=0.05))
+                    rclpy.time.Time(seconds=0), timeout=Duration(seconds=0, nanoseconds=50000000))
                 t = transform.transform.translation
                 r = transform.transform.rotation
                 qx, qy, qz, qw = r.x, r.y, r.z, r.w

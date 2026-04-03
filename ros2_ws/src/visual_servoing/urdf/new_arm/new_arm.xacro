@@ -4,10 +4,11 @@
 <xacro:include filename="$(find visual_servoing)/urdf/new_arm/materials.xacro" />
 <xacro:include filename="$(find visual_servoing)/urdf/new_arm/new_arm.ros2_control.xacro" />
 <xacro:include filename="$(find visual_servoing)/urdf/new_arm/new_arm.gazebo.xacro" />
-<!-- World anchor: 180° yaw so robot arm faces world +X -->
+<!-- World anchor: 180° yaw so robot arm faces world +X
+     Z=-0.209 so end-effector hovers ~5cm above ground at home pose -->
 <link name="world"/>
 <joint name="world_fixed" type="fixed">
-  <origin xyz="0 0 0" rpy="0 0 3.14159265359"/>
+  <origin xyz="0 0 -0.209" rpy="0 0 3.14159265359"/>
   <parent link="world"/>
   <child link="base_link"/>
 </joint>
@@ -924,9 +925,12 @@
     </material>
   </visual>
 </link>
-<!-- Camera points to world +X, so local yaw=3.14159 -->
+<!-- Camera: mounted above base_link, pitched down to see ArUco board.
+     base_link is at world Z=-0.209, so camera local z=0.85 → world Z≈0.64.
+     Board is at world (0.5, 0, 0.35). Camera yaw=π cancels parent yaw.
+     Pitch=0.57 tilts camera down toward the board. -->
 <joint name="camera_joint" type="fixed">
-  <origin xyz="-0.1 0 0.1" rpy="0 0.6 3.14159265359"/>
+  <origin xyz="-0.05 0 0.85" rpy="0 0.57 3.14159265359"/>
   <parent link="base_link"/>
   <child link="camera_link"/>
 </joint>

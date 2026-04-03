@@ -33,6 +33,8 @@ def generate_launch_description():
         name='GZ_SIM_RESOURCE_PATH',
         value=new_gz_resource_path
     )
+
+
     
     # Get URDF via xacro - using flipped robot
     robot_description_content = Command(
@@ -53,11 +55,12 @@ def generate_launch_description():
     robot_description = {"robot_description": ParameterValue(robot_description_content, value_type=str)}
 
     # Robot State Publisher
+    # Output='log' to keep terminal clean (TF_OLD_DATA C++ warnings are harmless)
     robot_state_publisher_node = Node(
         package='robot_state_publisher',
         executable='robot_state_publisher',
         name='robot_state_publisher',
-        output='screen',
+        output='log',
         parameters=[robot_description, {'use_sim_time': True}]
     )
 
@@ -123,6 +126,7 @@ def generate_launch_description():
     )
 
     # Vision ArUco Detector Node
+    # Output='log' to keep launch terminal clean (camera matrix log is spammy)
     vision_detector = TimerAction(
         period=8.0,  # Wait for Gazebo camera to be ready
         actions=[
@@ -130,7 +134,7 @@ def generate_launch_description():
                 package='visual_servoing',
                 executable='vision_aruco_detector',
                 name='vision_aruco_detector',
-                output='screen',
+                output='log',
                 parameters=[{
                     'image_topic': '/camera/image_raw',
                     'show_gui': False,
@@ -152,6 +156,7 @@ def generate_launch_description():
     )
 
     # Gazebo Drawing Visualizer (spawns shapes + pen lines in Gazebo)
+    # Output='log' to suppress C++ TF_OLD_DATA warnings (harmless sim-time mismatch)
     gazebo_drawing_visualizer = TimerAction(
         period=10.0,  # Wait for Gazebo + vision to be ready
         actions=[
@@ -159,7 +164,7 @@ def generate_launch_description():
                 package='visual_servoing',
                 executable='gazebo_drawing_visualizer',
                 name='gazebo_drawing_visualizer',
-                output='screen',
+                output='log',
                 parameters=[{'use_sim_time': True}]
             )
         ]

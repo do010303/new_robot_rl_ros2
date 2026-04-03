@@ -55,87 +55,103 @@ class NeuralIKNetwork(nn.Module):
 
 def fk_batch_torch(joints, device):
     """
-    Batch FK computation using PyTorch for gradient flow
+    Batch FK computation using PyTorch for gradient flow.
+    
+    Exactly replicates the fk() chain from fk_ik_utils.py:
+      base_link → T_r6 → T_r18 → T_r19 → T_j20(Rz) → T_r21 → T_j22(Ry)
+      → T_j23(Ry) → T_r24 → T_r25 → T_j26(Rz) → T_r27 → T_j28(Ry)
+      → T_r29 → T_j30(Ry) → T_r32 → T_r33 → bibut_1 (EE)
+    
+    Joint axes (from URDF):
+      J1 (Rev20): axis=(0,0,-1)  → Rz(-q[0])
+      J2 (Rev22): axis=(0,-1,0) → Ry(-q[1])
+      J3 (Rev23): axis=(0,-1,0) → Ry(-q[2])
+      J4 (Rev26): axis=(0,0,-1) → Rz(-q[3])
+      J5 (Rev28): axis=(0,-1,0) → Ry(-q[4])
+      J6 (Rev30): axis=(0,1,0)  → Ry(+q[5])
     """
-    # Joint transforms from URDF
-    offsets = [
-        torch.tensor([[0.0], [0.0], [0.068502]], device=device),       # (3, 1)
-        torch.tensor([[0.041821], [-0.019984], [0.053522]], device=device),
-        torch.tensor([[-0.075886], [-7e-06], [0.116723]], device=device),
-        torch.tensor([[0.032204], [0.031535], [0.062164]], device=device),
-        torch.tensor([[-0.032579], [-0.0331], [0.077214]], device=device),
-        torch.tensor([[0.0316], [0.0153], [0.0638]], device=device),
-    ]
-    ee_offset = torch.tensor([[0.00007], [-0.016091], [0.046444]], device=device)
-    
     batch_size = joints.shape[0]
-    pos = torch.zeros(batch_size, 3, device=device)
     
-    # Initialize rotation as identity for each sample (batch, 3, 3)
-    R = torch.eye(3, device=device).unsqueeze(0).repeat(batch_size, 1, 1)
-    
-    def rot_z(theta):
+    def make_Rz(theta):
+        """Rz rotation matrix (batch)"""
         c, s = torch.cos(theta), torch.sin(theta)
         zeros = torch.zeros_like(theta)
         ones = torch.ones_like(theta)
         return torch.stack([
             torch.stack([c, -s, zeros], dim=-1),
-            torch.stack([s, c, zeros], dim=-1),
+            torch.stack([s,  c, zeros], dim=-1),
             torch.stack([zeros, zeros, ones], dim=-1)
         ], dim=-2)
     
-    def rot_x(theta):
+    def make_Ry(theta):
+        """Ry rotation matrix (batch)"""
         c, s = torch.cos(theta), torch.sin(theta)
         zeros = torch.zeros_like(theta)
         ones = torch.ones_like(theta)
         return torch.stack([
-            torch.stack([ones, zeros, zeros], dim=-1),
-            torch.stack([zeros, c, -s], dim=-1),
-            torch.stack([zeros, s, c], dim=-1)
-        ], dim=-2)
-    
-    def rot_y(theta):
-        c, s = torch.cos(theta), torch.sin(theta)
-        zeros = torch.zeros_like(theta)
-        ones = torch.ones_like(theta)
-        return torch.stack([
-            torch.stack([c, zeros, s], dim=-1),
+            torch.stack([c,  zeros, s], dim=-1),
             torch.stack([zeros, ones, zeros], dim=-1),
             torch.stack([-s, zeros, c], dim=-1)
         ], dim=-2)
     
-    def apply_offset(R, offset):
-        # offset: (3, 1), R: (batch, 3, 3)
-        # Expand offset to (batch, 3, 1)
-        offset_batch = offset.unsqueeze(0).repeat(batch_size, 1, 1)
-        return torch.bmm(R, offset_batch).squeeze(-1)  # (batch, 3)
+    # Start at origin with identity rotation
+    pos = torch.zeros(batch_size, 3, device=device)
+    R = torch.eye(3, device=device).unsqueeze(0).repeat(batch_size, 1, 1)
     
-    # Joint 1: Z-axis
-    pos = pos + offsets[0].squeeze(-1)  # First offset is just added
-    R = R @ rot_z(joints[:, 0])
+    def apply_translation(pos, R, tx, ty, tz):
+        """Apply a fixed translation in the current local frame"""
+        t = torch.tensor([tx, ty, tz], device=device, dtype=torch.float32)
+        return pos + torch.bmm(R, t.unsqueeze(0).unsqueeze(-1).repeat(batch_size, 1, 1)).squeeze(-1)
     
-    # Joint 2: -X-axis (flipped)
-    pos = pos + apply_offset(R, offsets[1])
-    R = R @ rot_x(-joints[:, 1])  # Axis is [-1, 0, 0]
+    # Fixed: base_link → old_component__6__1
+    pos = apply_translation(pos, R, -0.046528, 0.031724, 0.748891)
+    # Fixed: → old_component__14__1
+    pos = apply_translation(pos, R, -0.093, 0.0, -0.01)
+    # Fixed: → old_component__15__1
+    pos = apply_translation(pos, R, 0.04889, -0.028138, -0.00625)
     
-    # Joint 3: +X-axis (flipped)
-    pos = pos + apply_offset(R, offsets[2])
-    R = R @ rot_x(joints[:, 2])   # Axis is [1, 0, 0]
+    # Rev 20: axis=(0,0,-1) → Rz(-q[0])
+    pos = apply_translation(pos, R, -0.034687, -0.0039, -0.0162)
+    R = torch.bmm(R, make_Rz(-joints[:, 0]))
     
-    # Joint 4: -Y-axis
-    pos = pos + apply_offset(R, offsets[3])
-    R = R @ rot_y(-joints[:, 3])  # Axis is [0, -1, 0]
+    # Fixed: → old_component__17__1
+    pos = apply_translation(pos, R, -0.048931, -0.007, -0.033724)
     
-    # Joint 5: +X-axis (flipped)
-    pos = pos + apply_offset(R, offsets[4])
-    R = R @ rot_x(joints[:, 4])   # Axis is [1, 0, 0]
+    # Rev 22: axis=(0,-1,0) → Ry(-q[1])
+    pos = apply_translation(pos, R, 0.034687, -0.0192, -0.0039)
+    R = torch.bmm(R, make_Ry(-joints[:, 1]))
     
-    # Joint 6: -Y-axis
-    pos = pos + apply_offset(R, offsets[5])
-    R = R @ rot_y(-joints[:, 5])  # Axis is [0, -1, 0]
+    # Rev 23: axis=(0,-1,0) → Ry(-q[2])
+    pos = apply_translation(pos, R, 0.0, 0.0, -0.155)
+    R = torch.bmm(R, make_Ry(-joints[:, 2]))
     
-    # End-effector offset
-    pos = pos + apply_offset(R, ee_offset)
+    # Fixed: → old_component__20__1
+    pos = apply_translation(pos, R, -0.0039, 0.0192, -0.034687)
+    # Fixed: → old_component__21__1
+    pos = apply_translation(pos, R, 0.03375, 0.0362, -0.042816)
+    
+    # Rev 26: axis=(0,0,-1) → Rz(-q[3])
+    pos = apply_translation(pos, R, 0.0, -0.00995, -0.0148)
+    R = torch.bmm(R, make_Rz(-joints[:, 3]))
+    
+    # Fixed: → old_component__23__1
+    pos = apply_translation(pos, R, 0.0152, -0.023, -0.0425)
+    
+    # Rev 28: axis=(0,-1,0) → Ry(-q[4])
+    pos = apply_translation(pos, R, -0.00995, -0.0148, 0.0)
+    R = torch.bmm(R, make_Ry(-joints[:, 4]))
+    
+    # Fixed: → old_component__25__1
+    pos = apply_translation(pos, R, -0.0152, 0.0075, -0.075)
+    
+    # Rev 30: axis=(0,1,0) → Ry(+q[5])
+    pos = apply_translation(pos, R, 0.02045, 0.015, 0.0)
+    R = torch.bmm(R, make_Ry(joints[:, 5]))
+    
+    # Fixed: → but_1
+    pos = apply_translation(pos, R, 0.0, 0.01225, -0.01)
+    # Fixed: → bibut_1 (end-effector)
+    pos = apply_translation(pos, R, 0.0, 0.0, -0.045)
     
     return pos
 
@@ -147,11 +163,13 @@ class NeuralIK:
         self.device = device or (torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu'))
         self.model = NeuralIKNetwork().to(self.device)
         
-        # -Y Workspace bounds (ArUco board at Y ≈ -0.27)
-        self.pos_min = np.array([-0.10, -0.35, 0.15])  # Y: -0.35 to -0.15
-        self.pos_max = np.array([ 0.10, -0.15, 0.35])
+        # Workspace bounds (base_link frame)
+        # Board at base_link X≈-0.50, Y≈0, Z≈0.56
+        # These defaults are overwritten by generate_training_data()
+        self.pos_min = np.array([-0.55, -0.43, 0.26])
+        self.pos_max = np.array([ 0.30,  0.43, 0.94])
         
-        print(f"✅ Neural IK v2 (-Y workspace) initialized on {self.device}")
+        print(f"✅ Neural IK v2 (base_link workspace) initialized on {self.device}")
         print(f"   Workspace: X=[{self.pos_min[0]:.2f}, {self.pos_max[0]:.2f}], "
               f"Y=[{self.pos_min[1]:.2f}, {self.pos_max[1]:.2f}], "
               f"Z=[{self.pos_min[2]:.2f}, {self.pos_max[2]:.2f}]")

@@ -64,7 +64,7 @@ class BoardTransform:
         try:
             tf = self.tf_buffer.lookup_transform(
                 'base_link', pose_msg.header.frame_id,
-                rclpy.time.Time(), timeout=Duration(seconds=0.2)
+                rclpy.time.Time(seconds=0), timeout=Duration(seconds=0.2)
             )
             
             t = tf.transform.translation

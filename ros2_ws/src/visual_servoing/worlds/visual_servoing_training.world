@@ -107,11 +107,11 @@
       <pose>0.5 0.048 0.304 0 0 1.5708</pose>
     </include>
 
-    <!-- Drawing Surface Board - Behind markers as background -->
+    <!-- Drawing Surface Board - Flush with markers -->
     <model name="drawing_surface">
       <static>true</static>
-      <!-- Placed exactly behind markers X=0.51 -> slightly further away to not clip -->
-      <pose>0.51 0.0 0.352 1.5708 0 1.5708</pose> 
+      <!-- Board at X=0.50, flush with ArUco markers for accurate detection -->
+      <pose>0.50 0.0 0.352 1.5708 0 1.5708</pose> 
       <link name="surface_link">
         <visual name="surface_visual">
           <geometry>

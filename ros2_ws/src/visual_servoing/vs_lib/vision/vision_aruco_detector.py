@@ -123,11 +123,14 @@ class VisionArucoDetector(Node):
         self.get_logger().info(f"[VisionAruco] Board size: {BOARD_SIZE_M*100:.0f}cm, Pose cache: {self.cache_timeout}s")
     
     def camera_info_callback(self, msg: CameraInfo):
-        """Update camera intrinsics from camera_info topic."""
-        if self.camera_matrix is None or msg.k[0] > 0:
-            self.camera_matrix = np.array(msg.k).reshape(3, 3)
-            self.dist_coeffs = np.array(msg.d) if len(msg.d) > 0 else np.zeros(5)
-            self.get_logger().info(f"[VisionAruco] Camera matrix updated: fx={msg.k[0]:.1f}")
+        """Update camera intrinsics from camera_info topic (only once)."""
+        if msg.k[0] > 0:
+            new_fx = msg.k[0]
+            # Only update and log if fx changed significantly (first real update)
+            if self.camera_matrix is None or abs(self.camera_matrix[0, 0] - new_fx) > 1.0:
+                self.camera_matrix = np.array(msg.k).reshape(3, 3)
+                self.dist_coeffs = np.array(msg.d) if len(msg.d) > 0 else np.zeros(5)
+                self.get_logger().info(f"[VisionAruco] Camera matrix updated: fx={new_fx:.1f}")
     
     def image_callback(self, msg: Image):
         """Process camera image for ArUco detection."""

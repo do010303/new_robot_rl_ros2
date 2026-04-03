@@ -75,9 +75,14 @@ class GazeboDrawingVisualizer(Node):
         self.triangle_segments: List[str] = []
         self.last_waypoints_hash = None  # To prevent duplicate spawning
         
+        # Reaching target sphere tracking
+        self.reaching_target_name = 'reaching_target'
+        self.reaching_target_spawned = False
+        
         # Colors
         self.line_color = (0.0, 1.0, 0.0, 1.0)  # Green for pen path
         self.target_color = (1.0, 0.5, 0.0, 0.8)  # Orange for waypoints
+        self.reaching_color = (1.0, 0.0, 0.0, 0.9)  # Red for reaching target
         
         # Subscribe to board pose (ArUco detection)
         self.board_sub = self.create_subscription(
@@ -107,10 +112,47 @@ class GazeboDrawingVisualizer(Node):
             Empty, '/drawing/reset_line', self.reset_callback
         )
         
+        # Subscribe to reaching target (from rl_environment)
+        self.target_sub = self.create_subscription(
+            Point, '/rl/current_target',
+            self._reaching_target_callback, 10
+        )
+        
+        # Startup grace period — skip pen points until TF is stable
+        self.startup_time = time.time()
+        self.tf_ready = False  # Set True after first successful TF lookup
+        self.STARTUP_GRACE_SEC = 3.0  # Skip pen points during first 3 seconds
+        
         self.get_logger().info("✅ Gazebo Drawing Visualizer ready!")
         self.get_logger().info("   Board pose: /vision/board_pose")
         self.get_logger().info("   Pen path:   /drawing/pen_position")
         self.get_logger().info("   Shapes:     /rl/shape_waypoints")
+        self.get_logger().info("   Target:     /rl/current_target")
+    
+    def _reaching_target_callback(self, msg: Point):
+        """Spawn/respawn a target sphere for reaching mode."""
+        position_base = np.array([msg.x, msg.y, msg.z])
+        result = self._base_to_world(position_base)
+        if result is None:
+            return  # TF not ready
+        position_world = result[0]
+        
+        # Delete old sphere
+        if self.reaching_target_spawned:
+            self._delete_entity(self.reaching_target_name)
+            # Small delay to let Gazebo process deletion
+            time.sleep(0.1)
+        
+        # Spawn new sphere (1cm radius, red)
+        self._spawn_sphere(
+            self.reaching_target_name, position_world,
+            radius=0.01, color=self.reaching_color
+        )
+        self.reaching_target_spawned = True
+        self.get_logger().info(
+            f"🎯 Target sphere at world: ({position_world[0]:.3f}, "
+            f"{position_world[1]:.3f}, {position_world[2]:.3f})"
+        )
     
     def _board_callback(self, msg: PoseStamped):
         """Lock board transform pipeline from ArUco detection."""
@@ -164,31 +206,38 @@ class GazeboDrawingVisualizer(Node):
         self._spawn_waypoint_spheres(waypoints_world)
     
     def _base_to_world(self, points_base: np.ndarray) -> np.ndarray:
-        """Transform base_link points to Gazebo world coordinates."""
+        """Transform base_link points to Gazebo world coordinates.
+        
+        Returns None if TF is not ready (during startup grace period).
+        """
         from rclpy.duration import Duration
         try:
             tf = self.tf_buffer.lookup_transform(
                 'world', 'base_link',
-                rclpy.time.Time(), timeout=Duration(seconds=0.5)
+                rclpy.time.Time(seconds=0), timeout=Duration(seconds=0.5)
             )
             t = tf.transform.translation
             r = tf.transform.rotation
             q_list = [r.x, r.y, r.z, r.w]
             R = R_scipy.from_quat(q_list).as_matrix()
             
-            self.get_logger().info(
-                f"   🔄 TF2 world←base_link: t=({t.x:.3f}, {t.y:.3f}, {t.z:.3f}), "
-                f"q=({r.x:.3f}, {r.y:.3f}, {r.z:.3f}, {r.w:.3f})"
-            )
+            if not self.tf_ready:
+                self.tf_ready = True
+                self.get_logger().info(
+                    f"   🔄 TF2 world←base_link ready: t=({t.x:.3f}, {t.y:.3f}, {t.z:.3f})"
+                )
             
             pts = np.atleast_2d(points_base)
             transformed = (R @ pts.T).T + np.array([t.x, t.y, t.z])
             return transformed
         except Exception as e:
-            # Fallback (e.g. Z=0.5m flipped around X)
-            self.get_logger().warn(f"⚠️ TF2 missing world frame, using FALLBACK: {e}")
+            # During startup, return None instead of fallback
+            if not self.tf_ready:
+                self.get_logger().debug(f"TF2 not ready yet: {e}")
+                return None
+            # After TF has been working, use fallback
+            self.get_logger().warn(f"⚠️ TF2 lookup failed, using fallback: {e}")
             pts = np.atleast_2d(points_base).copy()
-            # Flipped 180 on X, Z=0.5
             transformed = pts.copy()
             transformed[:, 1] = -pts[:, 1]
             transformed[:, 2] = 0.5 - pts[:, 2]
@@ -380,9 +429,17 @@ class GazeboDrawingVisualizer(Node):
     
     def position_callback(self, msg: Point):
         """Handle pen position updates."""
+        # Skip pen points during startup grace period
+        elapsed = time.time() - self.startup_time
+        if elapsed < self.STARTUP_GRACE_SEC:
+            return
+        
         position_base = np.array([msg.x, msg.y, msg.z])
         # Transform base_link -> world for Gazebo line drawing
-        position_world = self._base_to_world(position_base)[0]
+        result = self._base_to_world(position_base)
+        if result is None:
+            return  # TF not ready yet
+        position_world = result[0]
         self.add_pen_point(position_world)
     
     def reset_trajectory_callback(self, msg: Bool):
