@@ -135,7 +135,29 @@ python3 train_visual_servoing.py
 ## Hardware
 
 - **Robot**: 6-DOF arm (custom URDF from Onshape CAD)
-- **Joints**: 4× Rz (yaw), 2× Ry (pitch)
-- **End-effector**: Pen tip (`bibut_1` link)
+- **Joints**: 4× Rz (yaw), 2× Ry (pitch) — all ±90° (joint 2: -60° to +90°)
+- **End-effector**: Pen tip (`bibut_1` link) with ArUco marker (ID 4) for camera tracking
 - **Camera**: Fixed overhead, pitched 33° toward board
 - **Target deployment**: Raspberry Pi 4 via ONNX Runtime
+
+## End-Effector ArUco Marker
+
+A small ArUco marker (ID 4, 20mm) is attached next to the pen for camera-based end-effector detection. To adjust its position, edit the `ee_aruco_joint` in `urdf/new_arm/new_arm.xacro`:
+
+```xml
+<joint name="ee_aruco_joint" type="fixed">
+  <origin xyz="0.015 0.025 -0.015" rpy="1.5708 0 0"/>
+  <parent link="but_1"/>
+  <child link="ee_aruco_marker"/>
+</joint>
+```
+
+| Parameter | Effect |
+|-----------|--------|
+| `xyz X` (0.015) | Forward/back relative to pen (increase = further from pen axis) |
+| `xyz Y` (0.025) | Left/right offset from pen center |
+| `xyz Z` (-0.015) | Up/down along pen shaft |
+| `rpy R` (1.5708) | Rotation so marker face is visible to overhead camera |
+
+The marker texture is generated from `DICT_4X4_1000` ID 4 and stored in `models/aruco_marker_4/materials/textures/marker_4.png`. The Gazebo material (PBR albedo map) is configured in `urdf/new_arm/new_arm.gazebo.xacro`.
+

@@ -230,12 +230,13 @@ class VisionArucoDetector(Node):
                         self.last_detection_time = time.time()
                         detected.data = True
                         
-                        if self.detection_count % 30 == 0:
+                        if self.detection_count == 0 or self.detection_count % 3000 == 0:
                             self.get_logger().info(
-                                f"[VisionAruco] Locked board: "
-                                f"pos=({self.locked_pose.pose.position.x:.3f}, "
+                                f"[VisionAruco] Board locked at "
+                                f"({self.locked_pose.pose.position.x:.3f}, "
                                 f"{self.locked_pose.pose.position.y:.3f}, "
-                                f"{self.locked_pose.pose.position.z:.3f})m"
+                                f"{self.locked_pose.pose.position.z:.3f})m "
+                                f"[frame #{self.detection_count}]"
                             )
                     
                     self.detection_count += 1
