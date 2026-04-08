@@ -121,10 +121,10 @@ class RLEnvironment(Node):
         
         # Joint limits for drone 6-DOF arm (from new_arm.xacro)
         self.joint_limits_low = np.array([
-            -3.14159, -1.04719, -3.14159, -3.14159, -1.57079, -3.14159
+            -1.5708, -1.0472, -1.5708, -1.5708, -1.5708, -1.5708
         ])
         self.joint_limits_high = np.array([
-            3.14159, 1.57079, 3.14159, 3.14159, 1.57079, 3.14159
+            1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708
         ])
         
         # IK success tracking (legacy, not used with direct joint control)
@@ -157,7 +157,7 @@ class RLEnvironment(Node):
             dtype=np.float32
         )
         
-        self.get_logger().info(f"📊 Action space: 6D absolute joint angles (±180°)")
+        self.get_logger().info(f"📊 Action space: 6D absolute joint angles (±90°)")
         self.get_logger().info(f"📊 Observation space: 16D state")
         
         # Target sphere state (static sphere in world file)

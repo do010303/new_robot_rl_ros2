@@ -11,13 +11,13 @@ Kinematic chain (from new_arm.xacro):
     → Rigid 19: xyz=(0.04889, -0.028138, -0.00625)    → old_component__15__1
     → Rev 20:   xyz=(-0.034687, -0.0039, -0.0162)     axis=(0 0 -1)  → old_component__16__1
     → Rigid 21: xyz=(-0.048931, -0.007, -0.033724)    → old_component__17__1
-    → Rev 22:   xyz=(0.034687, -0.0192, -0.0039)      axis=(0 -1 0)  → old_component__18__1
-    → Rev 23:   xyz=(0.0, 0.0, -0.155)                axis=(0 -1 0)  → old_component__19__1
+    → Rev 22:   xyz=(0.034687, -0.0192, -0.0039)      axis=(0 1 0)   → old_component__18__1
+    → Rev 23:   xyz=(0.0, 0.0, -0.155)                axis=(0 1 0)   → old_component__19__1
     → Rigid 24: xyz=(-0.0039, 0.0192, -0.034687)      → old_component__20__1
     → Rigid 25: xyz=(0.03375, 0.0362, -0.042816)      → old_component__21__1
     → Rev 26:   xyz=(0.0, -0.00995, -0.0148)          axis=(0 0 -1)  → old_component__22__1
     → Rigid 27: xyz=(0.0152, -0.023, -0.0425)         → old_component__23__1
-    → Rev 28:   xyz=(-0.00995, -0.0148, 0.0)          axis=(0 -1 0)  → old_component__24__1
+    → Rev 28:   xyz=(-0.00995, -0.0148, 0.0)          axis=(0 1 0)   → old_component__24__1
     → Rigid 29: xyz=(-0.0152, 0.0075, -0.075)         → old_component__25__1
     → Rev 30:   xyz=(0.02045, 0.015, 0.0)             axis=(0 1 0)   → giabut_1
     → Rigid 32: xyz=(0.0, 0.01225, -0.01)             → but_1
@@ -26,15 +26,14 @@ Kinematic chain (from new_arm.xacro):
 Rotation convention: axis=(ax,ay,az) with angle q means
   The joint rotates q radians about the specified axis vector.
   axis=(0,0,-1) → Rz(-q)
-  axis=(0,-1,0) → Ry(-q)  
   axis=(0,1,0)  → Ry(q)
 """
 
 import math
 from typing import Tuple
 
-JOINT_LIMITS_LOW  = (-3.141593, -1.570796, -0.785398, -3.141593, -2.356194, 0.0)
-JOINT_LIMITS_HIGH = ( 3.141593,  1.570796,  3.141593,  3.141593,  2.356194, 3.141593)
+JOINT_LIMITS_LOW  = (-1.5708, -1.0472, -1.5708, -1.5708, -1.5708, -1.5708)
+JOINT_LIMITS_HIGH = ( 1.5708,  1.5708,  1.5708,  1.5708,  1.5708,  1.5708)
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -90,11 +89,11 @@ def fk(q) -> Tuple[float,float,float]:
     # Fixed: → old_component__17__1
     T_r21 = _T(-0.048931, -0.007, -0.033724)
 
-    # Rev 22: axis=(0, -1, 0) → rotation = Ry(-q[1])
-    T_j22 = _chain(_T(0.034687, -0.0192, -0.0039), _Ry(-q[1]))
+    # Rev 22: axis=(0, 1, 0) → rotation = Ry(q[1])
+    T_j22 = _chain(_T(0.034687, -0.0192, -0.0039), _Ry(q[1]))
 
-    # Rev 23: axis=(0, -1, 0) → rotation = Ry(-q[2])
-    T_j23 = _chain(_T(0.0, 0.0, -0.155), _Ry(-q[2]))
+    # Rev 23: axis=(0, 1, 0) → rotation = Ry(q[2])
+    T_j23 = _chain(_T(0.0, 0.0, -0.155), _Ry(q[2]))
 
     # Fixed: → old_component__20__1
     T_r24 = _T(-0.0039, 0.0192, -0.034687)
@@ -107,8 +106,8 @@ def fk(q) -> Tuple[float,float,float]:
     # Fixed: → old_component__23__1
     T_r27 = _T(0.0152, -0.023, -0.0425)
 
-    # Rev 28: axis=(0, -1, 0) → rotation = Ry(-q[4])
-    T_j28 = _chain(_T(-0.00995, -0.0148, 0.0), _Ry(-q[4]))
+    # Rev 28: axis=(0, 1, 0) → rotation = Ry(q[4])
+    T_j28 = _chain(_T(-0.00995, -0.0148, 0.0), _Ry(q[4]))
 
     # Fixed: → old_component__25__1
     T_r29 = _T(-0.0152, 0.0075, -0.075)
