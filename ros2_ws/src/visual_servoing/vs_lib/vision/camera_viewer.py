@@ -32,7 +32,10 @@ class CameraViewer(Node):
     """Camera viewer with RL training overlay visualization."""
     
     def __init__(self):
-        super().__init__('camera_viewer')
+        super().__init__('camera_viewer',
+                         parameter_overrides=[
+                             rclpy.Parameter('use_sim_time', rclpy.Parameter.Type.BOOL, True)
+                         ])
         
         self.bridge = CvBridge()
         

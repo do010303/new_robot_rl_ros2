@@ -208,6 +208,12 @@ class RLEnvironment(Node):
         # Publishers for camera overlay (visual_servoing mode)
         self.rl_target_pub = self.create_publisher(Point, '/rl/current_target', 10)
         
+        # Publisher for ultra-fast PID streaming (bypasses Action Server overhead)
+        from trajectory_msgs.msg import JointTrajectory
+        self.fast_trajectory_pub = self.create_publisher(
+            JointTrajectory, '/arm_controller/joint_trajectory', 10
+        )
+        
         self.get_logger().info("✅ Publishers created")
     
     def _setup_subscribers(self):
@@ -590,6 +596,31 @@ class RLEnvironment(Node):
         
         return reward, done
     
+    def _stream_joint_positions(self, target_positions: np.ndarray, duration: float = 0.01) -> bool:
+        """
+        Ultra-fast direct topic publisher. Completely bypasses Action Server overhead.
+        Designed strictly for 100Hz+ streaming micro-movements (like PID tuning).
+        """
+        from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+        
+        target_positions = np.clip(target_positions, self.joint_limits_low, self.joint_limits_high)
+        
+        goal_msg = JointTrajectory()
+        goal_msg.joint_names = ['Revolute 20', 'Revolute 22', 'Revolute 23', 'Revolute 26', 'Revolute 28', 'Revolute 30']
+        goal_msg.header.stamp = self.get_clock().now().to_msg()
+        
+        point = JointTrajectoryPoint()
+        point.positions = target_positions.tolist()
+        point.velocities = [0.0] * 6
+        
+        sec = int(duration)
+        nanosec = int((duration - sec) * 1e9)
+        point.time_from_start = Duration(sec=sec, nanosec=nanosec)
+        
+        goal_msg.points = [point]
+        self.fast_trajectory_pub.publish(goal_msg)
+        return True
+    
     def _move_to_joint_positions(self, target_positions: np.ndarray, duration: float = 0.5) -> bool:
         """
         Move robot to specified joint positions
@@ -616,8 +647,10 @@ class RLEnvironment(Node):
         point = JointTrajectoryPoint()
         point.positions = target_positions.tolist()
         point.velocities = [0.0] * 6
-        # Set duration to 0.5 seconds for fast training
-        point.time_from_start = Duration(sec=0, nanosec=500000000)  # 0.5 seconds
+        # Set trajectory duration based on the argument parameter
+        sec = int(duration)
+        nanosec = int((duration - sec) * 1e9)
+        point.time_from_start = Duration(sec=sec, nanosec=nanosec)
         
         goal_msg.trajectory.points = [point]
         

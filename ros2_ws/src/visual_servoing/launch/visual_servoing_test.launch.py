@@ -2,16 +2,18 @@
 """
 Visual Servoing Test Launch File
 Launches flipped robot with camera and ArUco detection for testing.
+Optionally enables Digital Twin mirroring with digital_twin:=true
 """
 
 import os
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, TimerAction, SetEnvironmentVariable
+from launch.actions import IncludeLaunchDescription, TimerAction, SetEnvironmentVariable, DeclareLaunchArgument
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import Command, FindExecutable, PathJoinSubstitution
+from launch.substitutions import Command, FindExecutable, PathJoinSubstitution, LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from launch_ros.parameter_descriptions import ParameterValue
+from launch.conditions import IfCondition
 
 
 def generate_launch_description():
@@ -34,6 +36,13 @@ def generate_launch_description():
         value=new_gz_resource_path
     )
 
+    # ── Launch Arguments ──
+    digital_twin_arg = DeclareLaunchArgument(
+        'digital_twin',
+        default_value='false',
+        description='Enable Digital Twin mirroring (both Real-to-Sim and Sim-to-Real)'
+    )
+    digital_twin = LaunchConfiguration('digital_twin')
 
     
     # Get URDF via xacro - using flipped robot
@@ -170,7 +179,37 @@ def generate_launch_description():
         ]
     )
 
+    # ── Digital Twin Mirror Nodes (conditional) ──
+    # Real-to-Sim: Pi's /pca9685_servo/joint_states → Gazebo
+    real_to_sim_mirror = TimerAction(
+        period=14.0,  # Wait for controllers to fully load
+        actions=[
+            Node(
+                package='visual_servoing',
+                executable='gazebo_state_mirror',
+                name='gazebo_state_mirror',
+                output='screen',
+                condition=IfCondition(digital_twin)
+            )
+        ]
+    )
+
+    # Sim-to-Real: Gazebo's /joint_states → Pi's /pca9685_servo/command
+    sim_to_real_mirror = TimerAction(
+        period=14.0,
+        actions=[
+            Node(
+                package='visual_servoing',
+                executable='gazebo_to_real_mirror',
+                name='gazebo_to_real_mirror',
+                output='screen',
+                condition=IfCondition(digital_twin)
+            )
+        ]
+    )
+
     return LaunchDescription([
+        digital_twin_arg,
         set_gz_resource_path,
         robot_state_publisher_node,
         gazebo,
@@ -180,4 +219,7 @@ def generate_launch_description():
         arm_controller_spawner,
         vision_detector,
         gazebo_drawing_visualizer,
+        real_to_sim_mirror,
+        sim_to_real_mirror,
     ])
+

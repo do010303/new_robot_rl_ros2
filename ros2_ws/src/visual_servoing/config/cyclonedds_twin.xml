@@ -1,0 +1,17 @@
+<CycloneDDS>
+  <Domain>
+    <General>
+      <!-- Disable multicast — critical for Pi hotspot stability -->
+      <AllowMulticast>false</AllowMulticast>
+    </General>
+    <Discovery>
+      <Peers>
+        <!-- Pi hotspot IP (change if different) -->
+        <Peer address="192.168.50.1"/>
+        <!-- Laptop self (for local Gazebo nodes) -->
+        <Peer address="localhost"/>
+      </Peers>
+      <ParticipantIndex>auto</ParticipantIndex>
+    </Discovery>
+  </Domain>
+</CycloneDDS>

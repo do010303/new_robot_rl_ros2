@@ -1371,9 +1371,10 @@ def show_menu():
     print("4. 🧠 Train Neural IK Model")
     print("5. 🖋️ Drawing Task Training (SAC 6D Direct)")
     print("6. 🖋️ Drawing Task Training (SAC + Neural IK)")
+    print("7. 🎛️ PID Tuning (RL-Optimized PID Gains)")
     print("="*70)
     
-    choice = input("Select option (1-6): ").strip()
+    choice = input("Select option (1-7): ").strip()
     return choice
 
 
@@ -1886,6 +1887,469 @@ def train_drawing(args):
             except:
                 pass
 
+def train_pid_tuning(mode='reaching'):
+    """
+    Train RL agent to optimize PID gains for trajectory tracking.
+    
+    Self-contained training function — does NOT call train() or modify
+    any existing training infrastructure. Uses its own SAC agent with
+    24D state and 18D action dimensions.
+    
+    Targets are generated in joint-space (random valid configurations).
+    FK (exact URDF math) is used to compute XYZ for visualization only.
+    No Neural IK dependency.
+    
+    Args:
+        mode: 'reaching' or 'drawing' (both use joint-space for now)
+    """
+    print("\n" + "="*70)
+    print(f"🎛️  PID TUNING — RL-Optimized PID Gains ({mode.upper()})")
+    print("="*70)
+    print("Architecture: SAC → PID gains (18D) → position commands → Gazebo")
+    print("Episode: observe state → set gains → track trajectory → reward")
+    print("Targets: random joint-space → FK for sphere visualization")
+    print("="*70)
+    
+    # Lazy imports (only loaded for option 7)
+    from rl.pid_tuning_env import PIDTuningEnv
+    from controllers.pid_joint_controller import PIDJointController
+    
+    env = None
+    ros_initialized = False
+    
+    try:
+        # Initialize ROS2
+        rclpy.init()
+        ros_initialized = True
+        
+        # Create base RL environment (handles ROS2 communication)
+        print("\n📦 Creating base RL environment...")
+        base_env = RLEnvironment(
+            max_episode_steps=200,
+            goal_tolerance=0.01
+        )
+        
+        # Enable board tracking (ArUco detection for visualization + real-world)
+        print("📡 Enabling board tracking...")
+        base_env.enable_board_tracking()
+        
+        # Wait for environment to initialize
+        print("   Waiting for environment...")
+        time.sleep(2.0)
+        for _ in range(10):
+            rclpy.spin_once(base_env, timeout_sec=0.1)
+        
+        # Wait for ArUco board detection (needed for gazebo_drawing_visualizer)
+        print("\n⏳ Waiting for ArUco board detection...")
+        if not base_env.wait_for_initial_detection(timeout=10.0):
+            print("⚠️  No board detected — sphere visualization may be offset")
+            print("   (Training still works, targets are in joint space)")
+        else:
+            print("✅ Board detected — visualization active")
+        
+        # Create PID tuning environment (wraps base_env)
+        # Targets = random joints, FK for sphere visualization via /rl/current_target
+        print("\n🎛️  Creating PID Tuning environment...")
+        env = PIDTuningEnv(base_env)
+        
+        # Get training parameters
+        print("\n📊 PID Tuning Configuration")
+        print("="*70)
+        
+        episodes_input = input(f"Number of episodes (default 500): ").strip()
+        episodes = int(episodes_input) if episodes_input else 500
+        
+        print(f"\n✅ Configuration:")
+        print(f"   Episodes: {episodes}")
+        print(f"   State dim: {env.state_dim} (24D)")
+        print(f"   Action dim: {env.action_dim} (18D)")
+        print("="*70)
+        
+        # Create SAC agent for PID tuning (different dimensions from reaching/drawing)
+        print("\n🤖 Creating SAC agent for PID tuning...")
+        agent = SACAgentGazebo(
+            state_dim=env.state_dim,     # 24D
+            n_actions=env.action_dim,    # 18D
+            max_action=np.ones(env.action_dim),
+            min_action=-np.ones(env.action_dim),
+            actor_lr=3e-4,
+            critic_lr=3e-4,
+            gamma=0.99,
+            tau=0.05,
+            batch_size=256,
+            buffer_size=int(1e6),
+            auto_entropy_tuning=True
+        )
+        
+        # Override checkpoint directory for PID tuning mode
+        agent.checkpoint_dir = os.path.join(
+            os.path.dirname(__file__), 'checkpoints', 'sac_pid_tuning'
+        )
+        os.makedirs(agent.checkpoint_dir, exist_ok=True)
+        print(f"   Checkpoint dir: {agent.checkpoint_dir}")
+        
+        # Try to load existing models
+        best_actor = os.path.join(agent.checkpoint_dir, 'actor_sac_best.pth')
+        if os.path.exists(best_actor):
+            try:
+                agent.load_models(best_actor)
+                print(f"   ✅ Loaded pre-trained PID tuning model")
+            except Exception as e:
+                print(f"   ⚠️  Failed to load model: {e}")
+                print("   Starting with untrained agent")
+        else:
+            print("   📝 No pre-trained model found, starting fresh")
+        
+        # Try to load replay buffer
+        mode_suffix = 'sac_pid_tuning'
+        load_buffer = input("\n📦 Load existing replay buffer? (y/n): ").strip().lower()
+        if load_buffer == 'y':
+            import glob
+            pkl_dir = os.path.join(os.path.dirname(__file__), 'training_results', 'pkl')
+            buffer_files = sorted(
+                glob.glob(os.path.join(pkl_dir, f"*{mode_suffix}*.pkl")),
+                key=os.path.getmtime, reverse=True
+            )
+            if buffer_files:
+                default_buf = buffer_files[0]
+                buf_path = input(f"   Path (Enter={os.path.basename(default_buf)}): ").strip()
+                if not buf_path:
+                    buf_path = default_buf
+                if os.path.exists(buf_path):
+                    try:
+                        agent.replay_buffer.load(buf_path)
+                        print(f"   ✅ Buffer loaded: {agent.replay_buffer.size()} transitions")
+                    except Exception as e:
+                        print(f"   ❌ Failed: {e}")
+            else:
+                print("   No buffer files found")
+        
+        # Training statistics
+        episode_rewards = []
+        episode_iaes = []
+        episode_final_errors = []
+        actor_losses = []
+        critic_losses = []
+        
+        best_reward = -float('inf')
+        
+        # Results directory
+        results_dir = os.path.join(os.path.dirname(__file__), 'training_results')
+        pkl_dir = os.path.join(results_dir, 'pkl')
+        png_dir = os.path.join(results_dir, 'png')
+        csv_dir = os.path.join(results_dir, 'csv')
+        os.makedirs(pkl_dir, exist_ok=True)
+        os.makedirs(png_dir, exist_ok=True)
+        os.makedirs(csv_dir, exist_ok=True)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        
+        print("\n🚀 Starting PID tuning training...\n")
+        
+        LEARNING_STARTS = 10
+        OPT_STEPS = 32
+        SAVE_INTERVAL = 25
+        
+        for episode in range(episodes):
+            episode_start = time.time()
+            
+            # Reset environment (moves to home, generates target)
+            state = env.reset()
+            
+            # RL agent selects PID gains
+            action = agent.select_action(state, evaluate=False)
+            
+            # Execute trajectory with selected PID gains
+            next_state, reward, done, info = env.step(action)
+            
+            # Store transition (single-step MDP)
+            agent.store_transition(state, action, reward, next_state, float(done))
+            
+            # Training updates
+            a_loss, c_loss = None, None
+            if episode >= LEARNING_STARTS:
+                for _ in range(OPT_STEPS):
+                    a_loss, c_loss = agent.train()
+            
+            # Log statistics
+            episode_rewards.append(reward)
+            episode_iaes.append(info['iae'])
+            episode_final_errors.append(info['final_error'])
+            actor_losses.append(a_loss)
+            critic_losses.append(c_loss)
+            
+            episode_time = time.time() - episode_start
+            
+            # Print progress
+            avg_reward = np.mean(episode_rewards[-50:])
+            avg_iae = np.mean(episode_iaes[-50:])
+            
+            gains = info['gains']
+            kp_mean = np.mean(gains['Kp'])
+            ki_mean = np.mean(gains['Ki'])
+            kd_mean = np.mean(gains['Kd'])
+            
+            print(f"Ep {episode+1:4d}/{episodes} | "
+                  f"R: {reward:8.2f} | "
+                  f"IAE: {info['iae']:6.3f} | "
+                  f"CartesianMiss: {info['cartesian_dist_mm']:5.1f}mm | "
+                  f"Kp̄={kp_mean:.2f} Ki̊={ki_mean:.3f} Kd̄={kd_mean:.3f} | "
+                  f"{episode_time:.1f}s")
+            
+            # Save best model
+            if reward > best_reward and episode >= LEARNING_STARTS:
+                best_reward = reward
+                agent.save_models()
+                print(f"   💾 New best! Reward={reward:.2f}")
+                
+                # Save best gains
+                best_gains = env.get_best_gains()
+                if best_gains:
+                    import json
+                    gains_path = os.path.join(agent.checkpoint_dir, 'best_gains.json')
+                    gains_save = {
+                        k: v.tolist() if hasattr(v, 'tolist') else v
+                        for k, v in best_gains.items()
+                    }
+                    with open(gains_path, 'w') as f:
+                        json.dump(gains_save, f, indent=2)
+            
+            # Periodic saves
+            if (episode + 1) % SAVE_INTERVAL == 0:
+                agent.save_models(episode=episode+1)
+                agent.replay_buffer.save(
+                    os.path.join(pkl_dir, f'replay_buffer_ep{episode+1}_{mode_suffix}_{timestamp}.pkl')
+                )
+                print(f"   💾 Checkpoint saved (episode {episode+1})")
+        
+        # ================================================================
+        # TRAINING COMPLETE
+        # ================================================================
+        print("\n" + "="*70)
+        print("🎉 PID TUNING TRAINING COMPLETE!")
+        print("="*70)
+        
+        # Summary
+        print(f"\n📊 Summary ({episodes} episodes):")
+        print(f"   Average Reward: {np.mean(episode_rewards):.2f}")
+        print(f"   Best Reward: {max(episode_rewards):.2f}")
+        print(f"   Average IAE: {np.mean(episode_iaes):.4f}")
+        print(f"   Average Final Error: {np.mean(np.degrees(episode_final_errors)):.2f}°")
+        
+        best_gains = env.get_best_gains()
+        if best_gains:
+            print(f"\n   🏆 Best PID Gains (episode {best_gains['episode']}):")
+            print(f"      Kp: {np.round(best_gains['Kp'], 2)}")
+            print(f"      Ki: {np.round(best_gains['Ki'], 3)}")
+            print(f"      Kd: {np.round(best_gains['Kd'], 3)}")
+        
+        # Save final results
+        agent.save_models()
+        agent.replay_buffer.save(
+            os.path.join(pkl_dir, f'replay_buffer_final_{mode_suffix}_{timestamp}.pkl')
+        )
+        
+        # Plot PID tuning results
+        _plot_pid_tuning_results(
+            episode_rewards, episode_iaes, episode_final_errors,
+            actor_losses, critic_losses, env.get_gain_history(),
+            png_dir, csv_dir, timestamp
+        )
+        
+        # Save training results for continuation
+        import pickle
+        results = {
+            'episode_rewards': episode_rewards,
+            'episode_iaes': episode_iaes,
+            'episode_final_errors': episode_final_errors,
+            'actor_losses': actor_losses,
+            'critic_losses': critic_losses,
+            'gain_history': env.get_gain_history(),
+        }
+        results_path = os.path.join(pkl_dir, f'training_results_{mode_suffix}_{timestamp}.pkl')
+        with open(results_path, 'wb') as f:
+            pickle.dump(results, f)
+        print(f"💾 Results saved to: {results_path}")
+        
+        # Cleanup old files
+        cleanup_old_files(pkl_dir, f"replay_buffer_ep*{mode_suffix}*.pkl", 4)
+        cleanup_old_files(pkl_dir, f"replay_buffer_final*{mode_suffix}*.pkl", 1)
+        print(f"🧹 Cleaned up old buffer files")
+        
+        print("\n✅ PID tuning training complete!")
+        
+    except KeyboardInterrupt:
+        print("\n\n⚠️  Training interrupted by user")
+    except Exception as e:
+        print(f"\n❌ Training error: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        if env is not None:
+            try:
+                print("\n🏠 Returning robot to home position before exit...")
+                env.base_env._move_to_joint_positions(env.home_position, duration=2.0)
+                import time
+                time.sleep(2.0)
+            except Exception as e:
+                print(f"   ⚠️ Could not return home: {e}")
+                
+        if env is not None and hasattr(env, 'base_env'):
+            try:
+                env.base_env.destroy_node()
+            except Exception:
+                pass
+        if ros_initialized:
+            try:
+                rclpy.shutdown()
+            except Exception:
+                pass
+
+
+def _plot_pid_tuning_results(rewards, iaes, final_errors, actor_losses, critic_losses,
+                             gain_history, png_dir, csv_dir, timestamp):
+    """Plot PID tuning training statistics."""
+    episodes = np.arange(1, len(rewards) + 1)
+    
+    def cumulative_avg(data):
+        return [np.mean(data[:i+1]) for i in range(len(data))]
+    
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    fig.suptitle('PID Tuning Training — RL-Optimized Gains', fontsize=16, fontweight='bold')
+    
+    # Plot 1: Rewards
+    ax = axes[0, 0]
+    ax.plot(episodes, rewards, alpha=0.3, color='blue', linewidth=1.5)
+    ax.plot(episodes, cumulative_avg(rewards), color='darkblue', linewidth=3.0, label='Avg Reward')
+    ax.set_xlabel('Episode')
+    ax.set_ylabel('Reward')
+    ax.set_title('Episode Rewards')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    # Plot 2: IAE
+    ax = axes[0, 1]
+    ax.plot(episodes, iaes, alpha=0.3, color='orange', linewidth=1.5)
+    ax.plot(episodes, cumulative_avg(iaes), color='darkorange', linewidth=3.0, label='Avg IAE')
+    ax.set_xlabel('Episode')
+    ax.set_ylabel('IAE (rad·steps)')
+    ax.set_title('Integral Absolute Error')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    # Plot 3: Final Error
+    ax = axes[0, 2]
+    final_errors_deg = [np.degrees(e) for e in final_errors]
+    ax.plot(episodes, final_errors_deg, alpha=0.3, color='red', linewidth=1.5)
+    ax.plot(episodes, cumulative_avg(final_errors_deg), color='darkred', linewidth=3.0, label='Avg Error')
+    ax.set_xlabel('Episode')
+    ax.set_ylabel('Final Error (°)')
+    ax.set_title('Final Position Error')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    # Plot 4: Training Losses (Dual Y-axis)
+    ax = axes[1, 0]
+    ax2 = ax.twinx()  # Create a secondary y-axis for the Actor loss
+    
+    valid_a = [(i+1, l) for i, l in enumerate(actor_losses) if l is not None]
+    valid_c = [(i+1, l) for i, l in enumerate(critic_losses) if l is not None]
+    
+    line_c, line_a = None, None
+    if valid_c:
+        line_c = ax.plot(*zip(*valid_c), color='orange', alpha=0.8, label='Critic')
+        ax.set_ylabel('Critic Loss (MSE)', color='orange')
+        ax.tick_params(axis='y', labelcolor='orange')
+        
+    if valid_a:
+        line_a = ax2.plot(*zip(*valid_a), color='blue', alpha=0.8, label='Actor')
+        ax2.set_ylabel('Actor Loss (Policy)', color='blue')
+        ax2.tick_params(axis='y', labelcolor='blue')
+        
+    # Combine legends from both axes
+    lines = []
+    labels = []
+    if line_a:
+        lines += line_a
+        labels.append('Actor')
+    if line_c:
+        lines += line_c
+        labels.append('Critic')
+        
+    if lines:
+        ax.legend(lines, labels, loc='best')
+        
+    ax.set_xlabel('Episode')
+    ax.set_title('Training Losses')
+    ax.grid(True, alpha=0.3)
+    
+    # Plot 5: PID Gain Evolution
+    ax = axes[1, 1]
+    if gain_history:
+        kp_means = [np.mean(g['Kp']) for g in gain_history]
+        ki_means = [np.mean(g['Ki']) for g in gain_history]
+        kd_means = [np.mean(g['Kd']) for g in gain_history]
+        gh_eps = [g['episode'] for g in gain_history]
+        ax.plot(gh_eps, kp_means, color='red', linewidth=2, label='Kp (mean)')
+        ax.plot(gh_eps, ki_means, color='green', linewidth=2, label='Ki (mean)')
+        ax.plot(gh_eps, kd_means, color='blue', linewidth=2, label='Kd (mean)')
+    ax.set_xlabel('Episode')
+    ax.set_ylabel('Gain Value')
+    ax.set_title('PID Gain Evolution')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    # Plot 6: Summary
+    ax = axes[1, 2]
+    ax.axis('off')
+    best_r = max(rewards)
+    best_iae = min(iaes)
+    summary = f"""
+📊 PID Tuning Summary
+━━━━━━━━━━━━━━━━━━━
+
+Episodes: {len(rewards)}
+
+Rewards:
+  • Average: {np.mean(rewards):.2f}
+  • Best: {best_r:.2f}
+
+Tracking Quality:
+  • Best IAE: {best_iae:.4f}
+  • Avg Final Error: {np.mean(final_errors_deg):.2f}°
+  • Best Final Error: {min(final_errors_deg):.2f}°
+    """
+    ax.text(0.1, 0.5, summary, transform=ax.transAxes, fontsize=12,
+            verticalalignment='center', fontfamily='monospace',
+            bbox=dict(boxstyle='round', facecolor='lightcyan', alpha=0.5))
+    
+    plt.tight_layout()
+    plot_path = os.path.join(png_dir, f'pid_tuning_{timestamp}.png')
+    plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"📊 PID tuning plot saved: {plot_path}")
+    
+    # Save CSV
+    import csv
+    csv_path = os.path.join(csv_dir, f'pid_tuning_{timestamp}.csv')
+    with open(csv_path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['Episode', 'Reward', 'IAE', 'FinalError_deg',
+                         'Kp_mean', 'Ki_mean', 'Kd_mean', 'Actor_Loss', 'Critic_Loss'])
+        for i in range(len(rewards)):
+            gh = gain_history[i] if i < len(gain_history) else None
+            writer.writerow([
+                i+1,
+                f'{rewards[i]:.4f}',
+                f'{iaes[i]:.4f}',
+                f'{final_errors_deg[i]:.4f}',
+                f'{np.mean(gh["Kp"]):.4f}' if gh else '',
+                f'{np.mean(gh["Ki"]):.4f}' if gh else '',
+                f'{np.mean(gh["Kd"]):.4f}' if gh else '',
+                f'{actor_losses[i]:.6f}' if actor_losses[i] is not None else '',
+                f'{critic_losses[i]:.6f}' if critic_losses[i] is not None else '',
+            ])
+    print(f"📊 PID tuning CSV saved: {csv_path}")
+
 
 def main():
     """Main entry point with interactive menu"""
@@ -1984,6 +2448,17 @@ def main():
         args.episodes = episodes
         args.max_steps = max_steps
         train_drawing(args)
+    elif choice == '7':
+        # PID Tuning (RL-Optimized PID Gains) — Sub-menu
+        print("\n🎛️ PID Tuning Mode:")
+        print("  a. 📍 Reaching (Random joint targets)")
+        print("  b. 🖋️  Drawing (Shape waypoints — requires IK, coming soon)")
+        sub = input("Select (a/b, default=a): ").strip().lower()
+        if sub == 'b':
+            print("\n⚠️  Drawing mode uses joint-space targets for now (IK not ready)")
+            train_pid_tuning(mode='drawing')
+        else:
+            train_pid_tuning(mode='reaching')
     else:
         print("❌ Invalid choice! Exiting...")
 

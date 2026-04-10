@@ -53,12 +53,13 @@ def get_urdf_files():
 setup(
     name=package_name,
     version='0.0.0',
-    packages=find_packages(exclude=['test']) + ['drawing', 'rl', 'utils', 'agents'],
+    packages=find_packages(exclude=['test']) + ['drawing', 'rl', 'utils', 'agents', 'digital_twin'],
     package_dir={
         'drawing': 'scripts/drawing',
         'rl': 'scripts/rl',
         'utils': 'scripts/utils',
         'agents': 'scripts/agents',
+        'digital_twin': 'scripts/digital_twin',
     },
     data_files=[
         ('share/ament_index/resource_index/packages',
@@ -91,6 +92,11 @@ setup(
             'vision_node = vs_lib.nodes.vision_node_ros2:main',
             'gazebo_drawing_visualizer = drawing.gazebo_visualizer:main',
             'fk_display = rl.fk_display:main',
+            # Digital Twin
+            'gazebo_state_mirror = digital_twin.gazebo_state_mirror:main',
+            'gazebo_to_real_mirror = digital_twin.gazebo_to_real_mirror:main',
+            'test_ros2_connection = digital_twin.test_ros2_connection:main',
+            'test_ros2_connection_pi = digital_twin.test_ros2_connection_pi:main',
         ],
     },
 )
