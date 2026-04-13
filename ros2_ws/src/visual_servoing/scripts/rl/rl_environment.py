@@ -157,7 +157,7 @@ class RLEnvironment(Node):
             dtype=np.float32
         )
         
-        self.get_logger().info(f"📊 Action space: 6D absolute joint angles (±90°)")
+        self.get_logger().info(f"📊 Action space: 6D absolute joint angles (0° to 180° mapping)")
         self.get_logger().info(f"📊 Observation space: 16D state")
         
         # Target sphere state (static sphere in world file)
@@ -402,9 +402,12 @@ class RLEnvironment(Node):
             dist_z = self.target_z - self.robot_z
             dist_3d = np.sqrt(dist_x**2 + dist_y**2 + dist_z**2)
             
+            # Map [-pi/2, pi/2] Gazebo joints space to [0, pi] positive agent space
+            rl_joints = self.joint_positions + 1.570796
+
             state = np.array([
                 # Joint positions (6)
-                *self.joint_positions,
+                *rl_joints,
                 # End-effector position (3)
                 self.robot_x, self.robot_y, self.robot_z,
                 # Target position (3)
@@ -527,8 +530,8 @@ class RLEnvironment(Node):
         # Calculate distance before (dist_3d is at index 15 in 18D state)
         dist_before = state_before[15]
         
-        # ABSOLUTE JOINT CONTROL: Action IS the target joint positions (not delta!)
-        target_joints = np.array(action)
+        # Convert agent's [0, 180°] to Gazebo's [-90°, 90°]
+        target_joints = np.array(action) - 1.570796
         
         # Clip to joint limits (±90°)
         target_joints = np.clip(target_joints, self.joint_limits_low, self.joint_limits_high)
