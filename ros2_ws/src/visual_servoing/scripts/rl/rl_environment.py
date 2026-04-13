@@ -101,7 +101,7 @@ class RLEnvironment(Node):
         self.robot_x = 0.0
         self.robot_y = 0.0
         self.robot_z = 0.0
-        self.joint_positions = [0.0] * 6
+        self.joint_positions = np.zeros(6)
         self.joint_velocities = [0.0] * 6
         
         # Target sphere state (initial position at center of workspace)  
@@ -326,7 +326,7 @@ class RLEnvironment(Node):
             else:
                 found_all = False
         
-        self.joint_positions = positions
+        self.joint_positions = np.array(positions)
         self.joint_velocities = velocities
         
         if found_all:
