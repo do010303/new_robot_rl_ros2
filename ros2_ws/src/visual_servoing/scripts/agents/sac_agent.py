@@ -328,7 +328,8 @@ class SACAgentGazebo:
         Returns:
             (actor_loss, critic_loss) or (None, None) if not enough samples
         """
-        if self.replay_buffer.size() < max(self.batch_size, 1000):
+        # Must have at least a full batch to start training
+        if self.replay_buffer.size() < self.batch_size:
             return None, None
         
         self.total_it += 1
