@@ -31,11 +31,12 @@ from builtin_interfaces.msg import Duration
 
 ACTIVE_JOINTS = [
     # (pi_name, gazebo_name, pi_home_deg, pi_inverted)
-    # pi_inverted=True means Pi direction is opposite to Gazebo
-    ("base",     "Revolute 20", 90.0,  False),
-    ("shoulder", "Revolute 22", 180.0, False),
-    ("elbow",    "Revolute 23", 0.0,   True),   # Pi 180=down, 0=up → inverted
-    ("pen",      "Revolute 30", 90.0,  False),
+    ("base",        "Revolute 20", 90.0,  False),
+    ("shoulder",    "Revolute 22",  90.0, False),
+    ("elbow",       "Revolute 23",  90.0,   True),
+    ("wrist_roll",  "Revolute 26", 0.0,   True),  # J4
+    ("wrist_pitch", "Revolute 28", 90.0,  False),  # J5
+    ("pen",         "Revolute 30", 90.0,  False),  # J6
 ]
 
 STATIC_JOINTS = {

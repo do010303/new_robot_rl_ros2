@@ -6,10 +6,10 @@
     </General>
     <Discovery>
       <Peers>
-        <!-- Pi hotspot IP (change if different) -->
+        <!-- Pi hotspot IP -->
         <Peer address="192.168.50.1"/>
-        <!-- Laptop self (for local Gazebo nodes) -->
-        <Peer address="localhost"/>
+        <!-- Laptop local (for Gazebo ROS 2 nodes to find each other) -->
+        <Peer address="127.0.0.1"/>
       </Peers>
       <ParticipantIndex>auto</ParticipantIndex>
     </Discovery>

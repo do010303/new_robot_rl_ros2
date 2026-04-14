@@ -119,18 +119,23 @@ class RLEnvironment(Node):
         # State readiness flag
         self.data_ready = False
         
-        # Joint limits for drone 6-DOF arm (from new_arm.xacro)
-        self.joint_limits_low = np.array([
-            -1.5708, -1.0472, -1.5708, -1.5708, -1.5708, -1.5708
+        # Joint limits for Gazebo physics (from new_arm.xacro)
+        self.gazebo_limits_low = np.array([
+            -3.1415, -3.1415, -3.1415, -3.1415, -3.1415, -3.1415
         ])
-        self.joint_limits_high = np.array([
-            1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708
+        self.gazebo_limits_high = np.array([
+            3.1415, 3.1415, 3.1415, 3.1415, 3.1415, 3.1415
         ])
+        
+        # RL Agent bounds strictly in [0, 180°] mapped positive space
+        self.joint_offsets = np.array([1.570796, 1.570796, 1.570796, 3.141592, 1.570796, 1.570796])
+        self.joint_limits_low = self.gazebo_limits_low + self.joint_offsets
+        self.joint_limits_high = self.gazebo_limits_high + self.joint_offsets
         
         # IK success tracking (legacy, not used with direct joint control)
         self.last_ik_success = 1.0
         
-        # Action space: 6D absolute joint angles (radians)
+        # Action space: 6D absolute joint angles (radians) [Positive-only]
         self.action_space = spaces.Box(
             low=self.joint_limits_low,
             high=self.joint_limits_high,
@@ -403,7 +408,7 @@ class RLEnvironment(Node):
             dist_3d = np.sqrt(dist_x**2 + dist_y**2 + dist_z**2)
             
             # Map [-pi/2, pi/2] Gazebo joints space to [0, pi] positive agent space
-            rl_joints = self.joint_positions + 1.570796
+            rl_joints = self.joint_positions + self.joint_offsets
 
             state = np.array([
                 # Joint positions (6)
@@ -531,10 +536,10 @@ class RLEnvironment(Node):
         dist_before = state_before[15]
         
         # Convert agent's [0, 180°] to Gazebo's [-90°, 90°]
-        target_joints = np.array(action) - 1.570796
+        target_joints = np.array(action) - self.joint_offsets
         
-        # Clip to joint limits (±90°)
-        target_joints = np.clip(target_joints, self.joint_limits_low, self.joint_limits_high)
+        # Clip to internal Gazebo joint limits
+        target_joints = np.clip(target_joints, self.gazebo_limits_low, self.gazebo_limits_high)
         
         # Execute movement - robot moves directly to target in single trajectory
         success = self._move_to_joint_positions(target_joints, duration=1.0)
@@ -606,7 +611,7 @@ class RLEnvironment(Node):
         """
         from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
         
-        target_positions = np.clip(target_positions, self.joint_limits_low, self.joint_limits_high)
+        target_positions = np.clip(target_positions, self.gazebo_limits_low, self.gazebo_limits_high)
         
         goal_msg = JointTrajectory()
         goal_msg.joint_names = ['Revolute 20', 'Revolute 22', 'Revolute 23', 'Revolute 26', 'Revolute 28', 'Revolute 30']
@@ -640,7 +645,7 @@ class RLEnvironment(Node):
             return False
         
         # Clip to joint limits
-        target_positions = np.clip(target_positions, self.joint_limits_low, self.joint_limits_high)
+        target_positions = np.clip(target_positions, self.gazebo_limits_low, self.gazebo_limits_high)
         
         # Create trajectory goal
         goal_msg = FollowJointTrajectory.Goal()

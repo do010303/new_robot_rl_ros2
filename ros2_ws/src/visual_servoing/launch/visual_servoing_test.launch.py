@@ -36,13 +36,21 @@ def generate_launch_description():
         value=new_gz_resource_path
     )
 
-    # ── Launch Arguments ──
-    digital_twin_arg = DeclareLaunchArgument(
-        'digital_twin',
-        default_value='false',
-        description='Enable Digital Twin mirroring (both Real-to-Sim and Sim-to-Real)'
+    # Force Gazebo's internal gz-transport to localhost only.
+    # Without this, gz-transport blasts multicast on ALL interfaces,
+    # which floods and crashes the Pi's Wi-Fi hotspot.
+    set_gz_ip = SetEnvironmentVariable(
+        name='GZ_IP',
+        value='127.0.0.1'
     )
-    digital_twin = LaunchConfiguration('digital_twin')
+
+    # ── Launch Arguments ──
+    digital_twin_mode_arg = DeclareLaunchArgument(
+        'digital_twin_mode',
+        default_value='none',
+        description='Enable Digital Twin mirroring: none, real_to_sim, or sim_to_real'
+    )
+    digital_twin_mode = LaunchConfiguration('digital_twin_mode')
 
     
     # Get URDF via xacro - using flipped robot
@@ -189,7 +197,9 @@ def generate_launch_description():
                 executable='gazebo_state_mirror',
                 name='gazebo_state_mirror',
                 output='screen',
-                condition=IfCondition(digital_twin)
+                condition=IfCondition(
+                    PythonExpression(["'", digital_twin_mode, "' == 'real_to_sim'"])
+                )
             )
         ]
     )
@@ -203,14 +213,17 @@ def generate_launch_description():
                 executable='gazebo_to_real_mirror',
                 name='gazebo_to_real_mirror',
                 output='screen',
-                condition=IfCondition(digital_twin)
+                condition=IfCondition(
+                    PythonExpression(["'", digital_twin_mode, "' == 'sim_to_real'"])
+                )
             )
         ]
     )
 
     return LaunchDescription([
-        digital_twin_arg,
+        digital_twin_mode_arg,
         set_gz_resource_path,
+        set_gz_ip,
         robot_state_publisher_node,
         gazebo,
         spawn_entity,

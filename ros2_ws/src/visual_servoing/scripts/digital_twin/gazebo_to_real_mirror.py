@@ -24,10 +24,12 @@ from sensor_msgs.msg import JointState
 
 # Gazebo joint → (Pi name, pi_home_deg, inverted)
 REVERSE_MAPPING = {
-    "Revolute 20": ("base",     90.0,  False),
-    "Revolute 22": ("shoulder", 180.0, False),
-    "Revolute 23": ("elbow",    0.0,   True),   # Inverted
-    "Revolute 30": ("pen",      90.0,  False),
+    "Revolute 20": ("base",         90.0,  False),
+    "Revolute 22": ("shoulder",     90.0, False),  # 0 upfront, 90 down, 180 under
+    "Revolute 23": ("elbow",        90.0,  True),  # 90 is home neutral
+    "Revolute 26": ("wrist_roll",    0.0,  True),  # J4: Gazebo=90 -> Pi=90
+    "Revolute 28": ("wrist_pitch",  90.0,  False),  # J5: Gazebo=0 -> Pi=90
+    "Revolute 30": ("pen",          90.0,  False),  # J6: Gazebo=0 -> Pi=90
 }
 
 # Only send commands at this rate (Hz) — Pi can't handle 50Hz

@@ -32,8 +32,8 @@ Rotation convention: axis=(ax,ay,az) with angle q means
 import math
 from typing import Tuple
 
-JOINT_LIMITS_LOW  = (-1.5708, -1.0472, -1.5708, -1.5708, -1.5708, -1.5708)
-JOINT_LIMITS_HIGH = ( 1.5708,  1.5708,  1.5708,  1.5708,  1.5708,  1.5708)
+JOINT_LIMITS_LOW  = (0.0, 0.5236, 0.0, 0.0, 0.0, 0.0)
+JOINT_LIMITS_HIGH = (3.14159, 3.14159, 3.14159, 3.14159, 3.14159, 3.14159)
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -75,6 +75,10 @@ def fk(q) -> Tuple[float,float,float]:
     Returns (x, y, z) in base_link frame.
     """
     if len(q)!=6: raise ValueError(f"Expected 6 joint angles, got {len(q)}")
+    
+    # Map input from positive agent space [0, pi] down to internal URDF space [-pi/2, pi/2]
+    offsets = [1.570796, 1.570796, 1.570796, 3.141592, 1.570796, 1.570796]
+    q_int = [q[i] - offsets[i] for i in range(6)]
 
     # Fixed: base_link → old_component__6__1
     T_r6  = _T(-0.046528, 0.031724, 0.748891)
@@ -84,36 +88,36 @@ def fk(q) -> Tuple[float,float,float]:
     T_r19 = _T(0.04889, -0.028138, -0.00625)
 
     # Rev 20: axis=(0, 0, -1) → rotation = Rz(-q[0])
-    T_j20 = _chain(_T(-0.034687, -0.0039, -0.0162), _Rz(-q[0]))
+    T_j20 = _chain(_T(-0.034687, -0.0039, -0.0162), _Rz(-q_int[0]))
 
     # Fixed: → old_component__17__1
     T_r21 = _T(-0.048931, -0.007, -0.033724)
 
-    # Rev 22: axis=(0, 1, 0) → rotation = Ry(q[1])
-    T_j22 = _chain(_T(0.034687, -0.0192, -0.0039), _Ry(q[1]))
+    # Rev 22: axis=(0, -1, 0) → rotation = Ry(-q[1])
+    T_j22 = _chain(_T(0.034687, -0.0192, -0.0039), _Ry(-q_int[1]))
 
     # Rev 23: axis=(0, 1, 0) → rotation = Ry(q[2])
-    T_j23 = _chain(_T(0.0, 0.0, -0.155), _Ry(q[2]))
+    T_j23 = _chain(_T(0.0, 0.0, -0.155), _Ry(q_int[2]))
 
     # Fixed: → old_component__20__1
     T_r24 = _T(-0.0039, 0.0192, -0.034687)
     # Fixed: → old_component__21__1
     T_r25 = _T(0.03375, 0.0362, -0.042816)
 
-    # Rev 26: axis=(0, 0, -1) → rotation = Rz(-q[3])
-    T_j26 = _chain(_T(0.0, -0.00995, -0.0148), _Rz(-q[3]))
+    # Rev 26: axis=(0, 0, 1) → rotation = Rz(q[3])
+    T_j26 = _chain(_T(0.0, -0.00995, -0.0148), _Rz(q_int[3]))
 
     # Fixed: → old_component__23__1
     T_r27 = _T(0.0152, -0.023, -0.0425)
 
-    # Rev 28: axis=(0, 1, 0) → rotation = Ry(q[4])
-    T_j28 = _chain(_T(-0.00995, -0.0148, 0.0), _Ry(q[4]))
+    # Rev 28: axis=(0, -1, 0) → rotation = Ry(-q[4])
+    T_j28 = _chain(_T(-0.00995, -0.0148, 0.0), _Ry(-q_int[4]))
 
     # Fixed: → old_component__25__1
     T_r29 = _T(-0.0152, 0.0075, -0.075)
 
     # Rev 30: axis=(0, 1, 0) → rotation = Ry(q[5])
-    T_j30 = _chain(_T(0.02045, 0.015, 0.0), _Ry(q[5]))
+    T_j30 = _chain(_T(0.02045, 0.015, 0.0), _Ry(q_int[5]))
 
     # Fixed: → but_1
     T_r32 = _T(0.0, 0.01225, -0.01)

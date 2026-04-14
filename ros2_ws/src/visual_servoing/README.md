@@ -55,6 +55,44 @@ source ~/new_rl_ros2/ros2_ws/install/setup.bash
 ros2 run visual_servoing camera_viewer
 ```
 
+### 4. Running Digital Twin with Raspberry Pi (Sim-to-Real)
+To mirror the simulation movements to the physical 4-DOF robot without Wi-Fi multicast errors, you must use the **FastDDS Discovery Server**.
+
+**On the Raspberry Pi:**
+```bash
+# Start the discovery server in the background
+fastdds discovery -i 0 -l 192.168.50.1 -p 11811 &
+
+# Point ROS to this server and launch the hardware listeners
+export ROS_DISCOVERY_SERVER="192.168.50.1:11811"
+cd ~/ros2_ws
+source install/setup.bash
+ros2 launch wicom_roboarm wicom_roboarm.launch.py
+```
+
+**On the Laptop (Gazebo Terminal):**
+```bash
+cd ~/new_rl_ros2/ros2_ws
+source install/setup.bash
+unset RMW_IMPLEMENTATION
+unset FASTRTPS_DEFAULT_PROFILES_FILE
+export ROS_DISCOVERY_SERVER="192.168.50.1:11811"
+
+ros2 launch visual_servoing visual_servoing_test.launch.py digital_twin_mode:=sim_to_real
+```
+
+**On the Laptop (Python Control Terminal):**
+```bash
+cd ~/new_rl_ros2/ros2_ws
+source install/setup.bash
+unset RMW_IMPLEMENTATION
+unset FASTRTPS_DEFAULT_PROFILES_FILE
+export ROS_DISCOVERY_SERVER="192.168.50.1:11811"
+
+cd src/visual_servoing/scripts
+python3 train_visual_servoing.py
+```
+
 ## Available Executables
 
 - `vision_aruco_detector` - ArUco marker detection node

@@ -48,6 +48,13 @@ def generate_launch_description():
         value=new_gz_resource_path
     )
 
+    # Force Gazebo's internal gz-transport to localhost only.
+    # Prevents multicast flooding that crashes the Pi's Wi-Fi hotspot.
+    set_gz_ip = SetEnvironmentVariable(
+        name='GZ_IP',
+        value='127.0.0.1'
+    )
+
     # ── Launch Arguments ──
     mode_arg = DeclareLaunchArgument(
         'mode',
@@ -162,6 +169,7 @@ def generate_launch_description():
     return LaunchDescription([
         mode_arg,
         set_gz_resource_path,
+        set_gz_ip,
         robot_state_publisher,
         gazebo,
         spawn_entity,

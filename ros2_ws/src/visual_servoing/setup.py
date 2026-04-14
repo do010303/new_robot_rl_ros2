@@ -1,6 +1,6 @@
-from setuptools import find_packages, setup
 import os
 from glob import glob
+from setuptools import setup, find_packages
 
 package_name = 'visual_servoing'
 
@@ -53,13 +53,14 @@ def get_urdf_files():
 setup(
     name=package_name,
     version='0.0.0',
-    packages=find_packages(exclude=['test']) + ['drawing', 'rl', 'utils', 'agents', 'digital_twin'],
+    packages=find_packages(exclude=['test']) + ['drawing', 'rl', 'utils', 'agents', 'digital_twin', 'controllers'],
     package_dir={
         'drawing': 'scripts/drawing',
         'rl': 'scripts/rl',
         'utils': 'scripts/utils',
         'agents': 'scripts/agents',
         'digital_twin': 'scripts/digital_twin',
+        'controllers': 'scripts/controllers',
     },
     data_files=[
         ('share/ament_index/resource_index/packages',
@@ -76,13 +77,9 @@ setup(
     zip_safe=True,
     maintainer='ducanh',
     maintainer_email='do010303@gmail.com',
-    description='Visual Servoing package for ceiling-mounted robot arm with ArUco markers',
+    description='Visual Servoing package for 6-DOF Robot Arm',
     license='MIT',
-    extras_require={
-        'test': [
-            'pytest',
-        ],
-    },
+    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'vision_aruco_detector = vs_lib.vision.vision_aruco_detector:main',
