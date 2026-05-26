@@ -13,7 +13,6 @@ import cv2
 import cv2.aruco as aruco
 import numpy as np
 from scipy.spatial.transform import Rotation as R_scipy
-import os
 
 from sensor_msgs.msg import Image, CameraInfo
 from geometry_msgs.msg import PoseStamped
@@ -61,10 +60,33 @@ class VisionArucoDetector(Node):
         self.declare_parameter('image_topic', '/camera/image_raw')
         self.declare_parameter('camera_info_topic', '/camera/camera_info')
         self.declare_parameter('show_gui', False)
+        self.declare_parameter('board_pose_topic', '/vision/board_pose')
+        self.declare_parameter('raw_board_pose_topic', '/vision/board_pose_raw')
+        self.declare_parameter('board_detected_topic', '/vision/board_detected')
+        self.declare_parameter('board_tracking_mode', 'static_locked')
+        self.declare_parameter('stable_frame_count', 30)
+        self.declare_parameter('publish_raw_board_pose', True)
+        self.declare_parameter('use_pose_cache', True)
+        self.declare_parameter('cache_timeout', 1.0)
         
         image_topic = self.get_parameter('image_topic').value
         camera_info_topic = self.get_parameter('camera_info_topic').value
         self.show_gui = self.get_parameter('show_gui').value
+        self.board_pose_topic = self.get_parameter('board_pose_topic').value
+        self.raw_board_pose_topic = self.get_parameter('raw_board_pose_topic').value
+        self.board_detected_topic = self.get_parameter('board_detected_topic').value
+        self.board_tracking_mode = self.get_parameter('board_tracking_mode').value
+        self.publish_raw_board_pose = self.get_parameter('publish_raw_board_pose').value
+        self.use_pose_cache = self.get_parameter('use_pose_cache').value
+        self.buffer_size = max(1, int(self.get_parameter('stable_frame_count').value))
+        self.cache_timeout = float(self.get_parameter('cache_timeout').value)
+        
+        if self.board_tracking_mode not in {'static_locked', 'continuous'}:
+            self.get_logger().warn(
+                f"[VisionAruco] Unknown board_tracking_mode='{self.board_tracking_mode}', "
+                "falling back to 'static_locked'"
+            )
+            self.board_tracking_mode = 'static_locked'
         
         # CV Bridge
         self.bridge = CvBridge()
@@ -105,9 +127,13 @@ class VisionArucoDetector(Node):
         
         # Publishers
         self.board_pose_pub = self.create_publisher(
-            PoseStamped, '/vision/board_pose', 10)
+            PoseStamped, self.board_pose_topic, 10)
+        self.raw_board_pose_pub = None
+        if self.publish_raw_board_pose:
+            self.raw_board_pose_pub = self.create_publisher(
+                PoseStamped, self.raw_board_pose_topic, 10)
         self.board_detected_pub = self.create_publisher(
-            Bool, '/vision/board_detected', 10)
+            Bool, self.board_detected_topic, 10)
         
         # State
         self.last_board_pose = None
@@ -116,11 +142,57 @@ class VisionArucoDetector(Node):
         self.board_locked = False
         self.locked_pose = None
         self.pose_buffer = []  # To average multiple detections for stable lock
-        self.buffer_size = 30  # Average 30 frames for a solid lock
-        self.cache_timeout = 1.0  # Use cached pose for 1 second after losing detection
         
         self.get_logger().info(f"[VisionAruco] Started, listening on {image_topic}")
-        self.get_logger().info(f"[VisionAruco] Board size: {BOARD_SIZE_M*100:.0f}cm, Pose cache: {self.cache_timeout}s")
+        self.get_logger().info(
+            f"[VisionAruco] Mode={self.board_tracking_mode}, "
+            f"effective_pose_topic={self.board_pose_topic}, "
+            f"raw_pose_topic={self.raw_board_pose_topic if self.publish_raw_board_pose else 'disabled'}"
+        )
+        self.get_logger().info(
+            f"[VisionAruco] Board size: {BOARD_SIZE_M*100:.0f}cm, "
+            f"Pose cache: {self.cache_timeout}s"
+        )
+
+    @staticmethod
+    def _copy_pose(source_pose: PoseStamped) -> PoseStamped:
+        """Create a detached PoseStamped copy so cached/locked poses are stable."""
+        copied_pose = PoseStamped()
+        copied_pose.header.stamp = source_pose.header.stamp
+        copied_pose.header.frame_id = source_pose.header.frame_id
+        copied_pose.pose.position.x = source_pose.pose.position.x
+        copied_pose.pose.position.y = source_pose.pose.position.y
+        copied_pose.pose.position.z = source_pose.pose.position.z
+        copied_pose.pose.orientation.x = source_pose.pose.orientation.x
+        copied_pose.pose.orientation.y = source_pose.pose.orientation.y
+        copied_pose.pose.orientation.z = source_pose.pose.orientation.z
+        copied_pose.pose.orientation.w = source_pose.pose.orientation.w
+        return copied_pose
+
+    def _build_locked_pose(self) -> PoseStamped:
+        """Average the buffered detections into one stable effective pose."""
+        avg_pos = np.mean([
+            [p.pose.position.x, p.pose.position.y, p.pose.position.z]
+            for p in self.pose_buffer
+        ], axis=0)
+
+        avg_q = np.mean([
+            [p.pose.orientation.x, p.pose.orientation.y,
+             p.pose.orientation.z, p.pose.orientation.w]
+            for p in self.pose_buffer
+        ], axis=0)
+        avg_q /= np.linalg.norm(avg_q)
+
+        locked_pose = PoseStamped()
+        locked_pose.header.frame_id = self.pose_buffer[-1].header.frame_id
+        locked_pose.pose.position.x = float(avg_pos[0])
+        locked_pose.pose.position.y = float(avg_pos[1])
+        locked_pose.pose.position.z = float(avg_pos[2])
+        locked_pose.pose.orientation.x = float(avg_q[0])
+        locked_pose.pose.orientation.y = float(avg_q[1])
+        locked_pose.pose.orientation.z = float(avg_q[2])
+        locked_pose.pose.orientation.w = float(avg_q[3])
+        return locked_pose
     
     def camera_info_callback(self, msg: CameraInfo):
         """Update camera intrinsics from camera_info topic (only once)."""
@@ -190,66 +262,54 @@ class VisionArucoDetector(Node):
                     current_pose.pose.orientation.y = float(quat[1])
                     current_pose.pose.orientation.z = float(quat[2])
                     current_pose.pose.orientation.w = float(quat[3])
-                    
-                    if not self.board_locked:
-                        # Collect samples for averaging
-                        self.pose_buffer.append(current_pose)
-                        if len(self.pose_buffer) >= self.buffer_size:
-                            # Average position
-                            avg_pos = np.mean([
-                                [p.pose.position.x, p.pose.position.y, p.pose.position.z] 
-                                for p in self.pose_buffer
-                            ], axis=0)
-                            
-                            # Average quaternion (simple mean + normalize is robust for close rotations)
-                            avg_q = np.mean([
-                                [p.pose.orientation.x, p.pose.orientation.y, 
-                                 p.pose.orientation.z, p.pose.orientation.w]
-                                for p in self.pose_buffer
-                            ], axis=0)
-                            avg_q /= np.linalg.norm(avg_q)
-                            
-                            self.locked_pose = PoseStamped()
-                            self.locked_pose.header.frame_id = 'camera_optical_link'
-                            self.locked_pose.pose.position.x = avg_pos[0]
-                            self.locked_pose.pose.position.y = avg_pos[1]
-                            self.locked_pose.pose.position.z = avg_pos[2]
-                            self.locked_pose.pose.orientation.x = avg_q[0]
-                            self.locked_pose.pose.orientation.y = avg_q[1]
-                            self.locked_pose.pose.orientation.z = avg_q[2]
-                            self.locked_pose.pose.orientation.w = avg_q[3]
-                            
-                            self.board_locked = True
-                            self.get_logger().info(f"✨ Board pose LOCKED after {self.buffer_size} samples")
-                    
-                    # Always publish the locked pose once we have it
-                    if self.board_locked:
-                        self.locked_pose.header.stamp = self.get_clock().now().to_msg()
-                        self.board_pose_pub.publish(self.locked_pose)
-                        self.last_board_pose = self.locked_pose
+
+                    if self.raw_board_pose_pub is not None:
+                        self.raw_board_pose_pub.publish(self._copy_pose(current_pose))
+
+                    effective_pose = None
+                    if self.board_tracking_mode == 'static_locked':
+                        if not self.board_locked:
+                            self.pose_buffer.append(self._copy_pose(current_pose))
+                            if len(self.pose_buffer) > self.buffer_size:
+                                self.pose_buffer.pop(0)
+
+                            if len(self.pose_buffer) >= self.buffer_size:
+                                self.locked_pose = self._build_locked_pose()
+                                self.board_locked = True
+                                self.get_logger().info(
+                                    f"✨ Board pose LOCKED after {self.buffer_size} samples"
+                                )
+
+                        if self.board_locked and self.locked_pose is not None:
+                            effective_pose = self._copy_pose(self.locked_pose)
+                    else:
+                        effective_pose = current_pose
+
+                    if effective_pose is not None:
+                        effective_pose.header.stamp = self.get_clock().now().to_msg()
+                        self.board_pose_pub.publish(effective_pose)
+                        self.last_board_pose = self._copy_pose(effective_pose)
                         self.last_detection_time = time.time()
                         detected.data = True
                         
                         if self.detection_count == 0 or self.detection_count % 3000 == 0:
                             self.get_logger().info(
-                                f"[VisionAruco] Board locked at "
-                                f"({self.locked_pose.pose.position.x:.3f}, "
-                                f"{self.locked_pose.pose.position.y:.3f}, "
-                                f"{self.locked_pose.pose.position.z:.3f})m "
+                                f"[VisionAruco] Board pose at "
+                                f"({effective_pose.pose.position.x:.3f}, "
+                                f"{effective_pose.pose.position.y:.3f}, "
+                                f"{effective_pose.pose.position.z:.3f})m "
                                 f"[frame #{self.detection_count}]"
                             )
                     
                     self.detection_count += 1
         
         # Use cached pose when detection fails (handles robot occlusion)
-        if not detected.data and self.last_board_pose is not None:
+        if self.use_pose_cache and not detected.data and self.last_board_pose is not None:
             elapsed = time.time() - self.last_detection_time
             if elapsed < self.cache_timeout:
                 # Publish cached pose with updated timestamp
-                cached_msg = PoseStamped()
+                cached_msg = self._copy_pose(self.last_board_pose)
                 cached_msg.header.stamp = self.get_clock().now().to_msg()
-                cached_msg.header.frame_id = 'camera_optical_link'
-                cached_msg.pose = self.last_board_pose.pose
                 self.board_pose_pub.publish(cached_msg)
                 detected.data = True  # Still "detected" via cache
         
@@ -312,4 +372,3 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
-

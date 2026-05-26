@@ -886,32 +886,6 @@
   <child link="bibut_1"/>
 </joint>
 
-<!-- ========== ARUCO MARKER (ID 4) ON END-EFFECTOR ========== -->
-<!-- Small ArUco marker attached to the pen for camera-based end-effector detection.
-     Positioned to the right of the pen (local +Y), facing outward so the overhead
-     camera can see it. The marker face normal points along local +Y. -->
-<link name="ee_aruco_marker">
-  <inertial>
-    <mass value="0.001"/>
-    <inertia ixx="1e-07" iyy="1e-07" izz="1e-07" ixy="0" iyz="0" ixz="0"/>
-  </inertial>
-  <visual>
-    <origin xyz="0 0 0" rpy="0 0 0"/>
-    <geometry>
-      <box size="0.020 0.001 0.020"/>
-    </geometry>
-    <material name="aruco_white">
-      <color rgba="1.0 1.0 1.0 1.0"/>
-    </material>
-  </visual>
-</link>
-
-<joint name="ee_aruco_joint" type="fixed">
-  <!-- Offset: 25mm to the right of pen center, 15mm forward, rotated so marker face is visible from above -->
-  <origin xyz="-0.015 0.025 -0.015" rpy="1.5708 0 0"/>
-  <parent link="but_1"/>
-  <child link="ee_aruco_marker"/>
-</joint>
 
 <joint name="Revolute 34" type="fixed">
   <origin xyz="0.0 0.0 0.0535" rpy="0 0 0"/>

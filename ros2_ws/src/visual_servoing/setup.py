@@ -52,7 +52,7 @@ def get_urdf_files():
 
 setup(
     name=package_name,
-    version='0.0.0',
+    version='0.1.0',
     packages=find_packages(exclude=['test']) + ['drawing', 'rl', 'utils', 'agents', 'digital_twin', 'controllers'],
     package_dir={
         'drawing': 'scripts/drawing',
@@ -85,15 +85,12 @@ setup(
             'vision_aruco_detector = vs_lib.vision.vision_aruco_detector:main',
             'camera_viewer = vs_lib.vision.camera_viewer:main',
             'drawing_executor = vs_lib.nodes.drawing_executor_ros2:main',
-            'shape_generator = vs_lib.nodes.shape_generator:main',
             'vision_node = vs_lib.nodes.vision_node_ros2:main',
             'gazebo_drawing_visualizer = drawing.gazebo_visualizer:main',
-            'fk_display = rl.fk_display:main',
             # Digital Twin
             'gazebo_state_mirror = digital_twin.gazebo_state_mirror:main',
             'gazebo_to_real_mirror = digital_twin.gazebo_to_real_mirror:main',
-            'test_ros2_connection = digital_twin.test_ros2_connection:main',
-            'test_ros2_connection_pi = digital_twin.test_ros2_connection_pi:main',
+            'verify_connection = digital_twin.verify_connection:main',
         ],
     },
 )

@@ -55,22 +55,6 @@
 <xacro:link_gazebo link_name="old_component__31__1"/>
 <xacro:link_gazebo link_name="old_component__32__1"/>
 
-<!-- End-effector ArUco marker -->
-<gazebo reference="ee_aruco_marker">
-  <self_collide>false</self_collide>
-  <gravity>false</gravity>
-  <visual>
-    <material>
-      <diffuse>1 1 1 1</diffuse>
-      <specular>0.1 0.1 0.1 1</specular>
-      <pbr>
-        <metal>
-          <albedo_map>model://aruco_marker_4/materials/textures/marker_4.png</albedo_map>
-        </metal>
-      </pbr>
-    </material>
-  </visual>
-</gazebo>
 
 <!-- ========== CAMERA SENSOR ========== -->
 <gazebo reference="camera_link">

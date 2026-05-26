@@ -12,8 +12,17 @@ Features:
 - Reset lines on episode reset
 """
 
+import os
+import sys
+
+# Suppress C++ TF_OLD_DATA warnings before ROS imports.
+os.environ['TF2_CPP_LOGGING_LEVEL'] = 'ERROR'
+os.environ['TF_CPP_LOG_LEVEL'] = 'ERROR'
+
+import logging
 import rclpy
 from rclpy.node import Node
+from rclpy.clock import JumpThreshold
 from geometry_msgs.msg import Point, PoseStamped
 from std_msgs.msg import Float32MultiArray, Bool
 from std_srvs.srv import Empty
@@ -24,9 +33,6 @@ import time
 import tf2_ros
 from rclpy.duration import Duration
 from scipy.spatial.transform import Rotation as R_scipy
-
-import sys
-import os
 
 # Add scripts directory to path for imports
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -46,22 +52,50 @@ class GazeboDrawingVisualizer(Node):
     """Spawns drawing visuals in Gazebo using ArUco-detected board coordinates."""
     
     def __init__(self):
-        super().__init__('gazebo_drawing_visualizer')
+        super().__init__(
+            'gazebo_drawing_visualizer',
+            parameter_overrides=[
+                rclpy.parameter.Parameter('use_sim_time', rclpy.parameter.Parameter.Type.BOOL, True)
+            ]
+        )
         
         self.get_logger().info("🎨 Gazebo Drawing Visualizer starting...")
+        logging.getLogger('tf2_ros').setLevel(logging.ERROR)
         
         self.world_name = "visual_servoing_world"
+        self.declare_parameter('lock_board_pose', True)
+        self.declare_parameter('use_ideal_board_rotation', True)
+        self.declare_parameter('spawn_shape_waypoints', True)
+        self.declare_parameter('draw_pen_path', False)
+        self.lock_board_pose = self.get_parameter('lock_board_pose').value
+        self.use_ideal_board_rotation = self.get_parameter('use_ideal_board_rotation').value
+        self.spawn_shape_waypoints = self.get_parameter('spawn_shape_waypoints').value
+        self.draw_pen_path = self.get_parameter('draw_pen_path').value
         
         # Board tracking
         self.board_center = None  # Set by ArUco detection
+        self.board_pose_ready = False
         self.board_locked = False
+        self.last_board_status_log_time = 0.0
         
         # TF2 for coordinate transform
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+        self._tf_clock_jump_callback = self.get_clock().create_jump_callback(
+            JumpThreshold(
+                min_forward=Duration(seconds=3600.0),
+                min_backward=Duration(seconds=-1.0),
+                on_clock_change=True,
+            ),
+            post_callback=self._handle_tf_time_jump,
+        )
         
         from rl.board_transform import BoardTransform
-        self.board_transform = BoardTransform(self.tf_buffer)
+        self.board_transform = BoardTransform(
+            self.tf_buffer,
+            lock_transform=self.lock_board_pose,
+            use_ideal_rotation=self.use_ideal_board_rotation,
+        )
         
         # Pen path tracking
         self.pen_points: List[np.ndarray] = []
@@ -122,12 +156,39 @@ class GazeboDrawingVisualizer(Node):
         self.startup_time = time.time()
         self.tf_ready = False  # Set True after first successful TF lookup
         self.STARTUP_GRACE_SEC = 3.0  # Skip pen points during first 3 seconds
+        self.last_tf_lookup_time = 0.0
+        self.TF_LOOKUP_PERIOD = 0.1
+        self.cached_world_from_base = None
         
         self.get_logger().info("✅ Gazebo Drawing Visualizer ready!")
+        self.get_logger().info(
+            f"   Board mode: {'static_locked' if self.lock_board_pose else 'continuous'}, "
+            f"ideal_rotation={self.use_ideal_board_rotation}"
+        )
+        self.get_logger().info(
+            f"   Waypoints: {'enabled' if self.spawn_shape_waypoints else 'disabled'}, "
+            f"pen path: {'enabled' if self.draw_pen_path else 'disabled'}"
+        )
         self.get_logger().info("   Board pose: /vision/board_pose")
         self.get_logger().info("   Pen path:   /drawing/pen_position")
         self.get_logger().info("   Shapes:     /rl/shape_waypoints")
         self.get_logger().info("   Target:     /rl/current_target")
+
+    def _handle_tf_time_jump(self, _jump_info):
+        """Clear cached TF state when sim time jumps backward or clock changes."""
+        try:
+            self.tf_buffer.clear()
+        except Exception:
+            return
+
+        self.tf_ready = False
+        self.last_tf_lookup_time = 0.0
+        self.cached_world_from_base = None
+        self.board_transform.reset()
+        self.board_center = None
+        self.board_pose_ready = False
+        self.board_locked = False
+        self.get_logger().warn("⏱️ Sim-time jump detected — cleared GazeboVisualizer TF buffer")
     
     def _reaching_target_callback(self, msg: Point):
         """Spawn/respawn a target sphere for reaching mode."""
@@ -156,7 +217,7 @@ class GazeboDrawingVisualizer(Node):
     
     def _board_callback(self, msg: PoseStamped):
         """Lock board transform pipeline from ArUco detection."""
-        if self.board_locked:
+        if self.board_transform.lock_transform and self.board_transform.locked and self.board_pose_ready:
             return
         
         success = self.board_transform.update_from_pose(msg)
@@ -164,17 +225,29 @@ class GazeboDrawingVisualizer(Node):
         if success:
             center = self.board_transform.get_board_center_base()
             self.board_center = tuple(center)
-            self.board_locked = True
-            
-            self.get_logger().info(
-                f"🔒 Board transform locked for Gazebo Visualizer: "
-                f"({center[0]:.3f}, {center[1]:.3f}, {center[2]:.3f})"
-            )
+            self.board_pose_ready = True
+
+            if self.board_transform.lock_transform:
+                self.board_locked = True
+                self.get_logger().info(
+                    f"🔒 Board transform locked for Gazebo Visualizer: "
+                    f"({center[0]:.3f}, {center[1]:.3f}, {center[2]:.3f})"
+                )
+            else:
+                now = time.time()
+                if now - self.last_board_status_log_time >= 5.0:
+                    self.last_board_status_log_time = now
+                    self.get_logger().info(
+                        f"📡 Board transform updated for Gazebo Visualizer: "
+                        f"({center[0]:.3f}, {center[1]:.3f}, {center[2]:.3f})"
+                    )
         else:
             self.get_logger().debug("TF2 not ready for Gazebo Visualizer board transform")
     
     def shape_waypoints_callback(self, msg: Float32MultiArray):
         """Spawn triangle from waypoints published by drawing_environment."""
+        if not self.spawn_shape_waypoints:
+            return
         if len(msg.data) < 9:
             return
         
@@ -192,6 +265,9 @@ class GazeboDrawingVisualizer(Node):
         
         # Transform base_link -> world for Gazebo spawning
         waypoints_world = self._base_to_world(waypoints_base)
+        if waypoints_world is None:
+            self.get_logger().debug("TF not ready yet for shape waypoint spawn")
+            return
         
         self.get_logger().info(f"🔺 Received NEW {n_points} waypoints, spawning in Gazebo world frame...")
         # Debug: log first and last waypoint in both frames
@@ -211,11 +287,23 @@ class GazeboDrawingVisualizer(Node):
         Returns None if TF is not ready (during startup grace period).
         """
         from rclpy.duration import Duration
+        if (not self.tf_ready) and (time.time() - self.startup_time < self.STARTUP_GRACE_SEC):
+            return None
         try:
-            tf = self.tf_buffer.lookup_transform(
-                'world', 'base_link',
-                rclpy.time.Time(seconds=0), timeout=Duration(seconds=0.5)
-            )
+            now_wall = time.time()
+            tf = None
+            if (not self.tf_ready) or (now_wall - self.last_tf_lookup_time >= self.TF_LOOKUP_PERIOD):
+                self.last_tf_lookup_time = now_wall
+                tf = self.tf_buffer.lookup_transform(
+                    'world', 'base_link',
+                    rclpy.time.Time(seconds=0), timeout=Duration(seconds=0.5)
+                )
+                self.cached_world_from_base = tf
+            else:
+                tf = self.cached_world_from_base
+
+            if tf is None:
+                return None
             t = tf.transform.translation
             r = tf.transform.rotation
             q_list = [r.x, r.y, r.z, r.w]
@@ -397,6 +485,8 @@ class GazeboDrawingVisualizer(Node):
     
     def add_pen_point(self, position: np.ndarray):
         """Add point to pen path and draw line segment in Gazebo."""
+        if not self.draw_pen_path:
+            return
         if self.last_point is not None:
             dist = np.linalg.norm(position - self.last_point)
             if dist < self.min_distance:
@@ -414,6 +504,8 @@ class GazeboDrawingVisualizer(Node):
     
     def reset(self):
         """Clear pen path (delete all pen line segments)."""
+        if not self.draw_pen_path:
+            return
         self.get_logger().info("🔄 Resetting pen path...")
         
         for name in self.spawned_segments:
@@ -429,6 +521,8 @@ class GazeboDrawingVisualizer(Node):
     
     def position_callback(self, msg: Point):
         """Handle pen position updates."""
+        if not self.draw_pen_path:
+            return
         # Skip pen points during startup grace period
         elapsed = time.time() - self.startup_time
         if elapsed < self.STARTUP_GRACE_SEC:
@@ -444,7 +538,7 @@ class GazeboDrawingVisualizer(Node):
     
     def reset_trajectory_callback(self, msg: Bool):
         """Reset pen path when training signals episode reset."""
-        if msg.data:
+        if self.draw_pen_path and msg.data:
             self.reset()
     
     def reset_callback(self, request, response):

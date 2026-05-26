@@ -12,8 +12,7 @@ This provides:
 
 import rclpy
 from rclpy.node import Node
-from rclpy.parameter import Parameter
-from rclpy.action import ActionClient
+from rclpy.clock import JumpThreshold
 from rclpy.duration import Duration
 import numpy as np
 import random
@@ -21,16 +20,16 @@ import time
 from typing import Tuple, Optional
 
 from sensor_msgs.msg import JointState
-from geometry_msgs.msg import Point, Pose, Quaternion, PoseStamped, PointStamped
+from geometry_msgs.msg import Point, PoseStamped
 from gazebo_msgs.msg import ModelStates
-from trajectory_msgs.msg import JointTrajectoryPoint
-from control_msgs.action import FollowJointTrajectory
-from std_srvs.srv import Empty
-from builtin_interfaces.msg import Duration
 
 # TF2 for end-effector tracking
 import tf2_ros
-from tf2_ros import TransformException
+
+from rl.control_backends import (
+    create_motion_backend,
+    resolve_control_backend,
+)
 
 # Gym for RL spaces
 try:
@@ -66,7 +65,6 @@ WORKSPACE_BOUNDS = {
     'z_max': SURFACE_Z_MAX -TARGET_RADIUS
 }
 
-
 # ============================================================================
 # RL ENVIRONMENT CLASS
 # ============================================================================
@@ -78,7 +76,13 @@ class RLEnvironment(Node):
     Provides Gym-compatible interface for reinforcement learning training.
     """
     
-    def __init__(self, max_episode_steps=200, goal_tolerance=0.01):
+    def __init__(
+        self,
+        max_episode_steps=200,
+        goal_tolerance=0.01,
+        control_backend: Optional[str] = None,
+        mirror_safe_moves: bool = True,
+    ):
         """
         Initialize RL Environment
         
@@ -86,11 +90,21 @@ class RLEnvironment(Node):
             max_episode_steps: Maximum steps per episode (default: 200)
             goal_tolerance: Distance threshold for goal achievement (default: 1cm = sphere radius)
         """
+        resolved_backend = resolve_control_backend(control_backend)
+        use_sim_time = resolved_backend != 'real_replay'
         super().__init__('rl_environment', parameter_overrides=[
-            rclpy.parameter.Parameter('use_sim_time', rclpy.parameter.Parameter.Type.BOOL, True)
+            rclpy.parameter.Parameter(
+                'use_sim_time',
+                rclpy.parameter.Parameter.Type.BOOL,
+                use_sim_time,
+            )
         ])
         
-        self.get_logger().info("🤖 Initializing RL Environment for 6-DOF Robot...")
+        self.control_backend_name = resolved_backend
+        self.get_logger().info(
+            f"🤖 Initializing RL Environment for 6-DOF Robot "
+            f"(backend={self.control_backend_name})..."
+        )
         
         # Configuration
         self.max_episode_steps = max_episode_steps
@@ -102,7 +116,7 @@ class RLEnvironment(Node):
         self.robot_y = 0.0
         self.robot_z = 0.0
         self.joint_positions = np.zeros(6)
-        self.joint_velocities = [0.0] * 6
+        self.joint_velocities = np.zeros(6)
         
         # Target sphere state (initial position at center of workspace)  
         self.target_x = 0.0
@@ -115,6 +129,7 @@ class RLEnvironment(Node):
         self.board_pose: Optional[PoseStamped] = None
         self.workspace_center = np.array([0.0, 0.22, 0.22])  # Default center
         self.board_transform_util = None  # Initialized in enable_board_tracking
+        self.last_board_status_log_time = 0.0
         
         # State readiness flag
         self.data_ready = False
@@ -170,8 +185,14 @@ class RLEnvironment(Node):
         
         # Initialize ROS2 interfaces
         self._setup_tf_listener()
-        self._setup_action_clients()
-        self._setup_service_clients()
+        self.motion_backend = create_motion_backend(
+            self,
+            backend_name=self.control_backend_name,
+            mirror_safe_moves=mirror_safe_moves,
+        )
+        self.digital_twin_enabled = (self.control_backend_name == 'sim_to_real_shadow')
+        self.digital_twin_mode = 'sim_to_real' if self.digital_twin_enabled else 'none'
+        self._setup_publishers()
         self._setup_subscribers()
         
         self.get_logger().info("✅ RL Environment initialized!")
@@ -180,30 +201,35 @@ class RLEnvironment(Node):
         """Initialize TF2 listener for end-effector position tracking"""
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
-        self.get_logger().info("✅ TF2 listener initialized")
-    
-    def _setup_action_clients(self):
-        """Initialize action client for robot trajectory control"""
-        self.get_logger().info("⏳ Connecting to trajectory action server...")
-        
-        self.trajectory_client = ActionClient(
-            self,
-            FollowJointTrajectory,
-            '/arm_controller/follow_joint_trajectory'
+        self._tf_clock_jump_callback = self.get_clock().create_jump_callback(
+            JumpThreshold(
+                min_forward=Duration(seconds=3600.0),
+                min_backward=Duration(seconds=-1.0),
+                on_clock_change=True,
+            ),
+            post_callback=self._handle_tf_time_jump,
         )
-        
-        # Wait for action server
-        if not self.trajectory_client.wait_for_server(timeout_sec=30.0):
-            self.get_logger().error("❌ Trajectory action server not available!")
-            raise Exception("Trajectory action server timeout")
-        
-        self.get_logger().info("✅ Trajectory action server connected!")
+        self.get_logger().info("✅ TF2 listener initialized")
+
+    def _handle_tf_time_jump(self, _jump_info):
+        """Clear TF history when sim time jumps backward or clock source changes."""
+        try:
+            self.tf_buffer.clear()
+        except Exception:
+            return
+
+        self.get_logger().warn("⏱️ Sim-time jump detected — cleared RL TF buffer")
+
+        if self.board_transform_util is not None:
+            self.board_transform_util.reset()
+        self.board_detected = False
+        self.board_pose = None
     
-    def _setup_service_clients(self):
-        """Initialize publishers for target teleportation"""
+    def _setup_publishers(self):
+        """Initialize publishers for target visualization and overlays."""
         self.get_logger().info("⏳ Setting up publishers...")
         
-        # Publisher for target position (target_manager subscribes and teleports sphere)
+        # Optional target visualization topic for external visualizers/sim helpers
         self.target_position_pub = self.create_publisher(
             Point,
             '/target_position',
@@ -212,12 +238,6 @@ class RLEnvironment(Node):
         
         # Publishers for camera overlay (visual_servoing mode)
         self.rl_target_pub = self.create_publisher(Point, '/rl/current_target', 10)
-        
-        # Publisher for ultra-fast PID streaming (bypasses Action Server overhead)
-        from trajectory_msgs.msg import JointTrajectory
-        self.fast_trajectory_pub = self.create_publisher(
-            JointTrajectory, '/arm_controller/joint_trajectory', 10
-        )
         
         self.get_logger().info("✅ Publishers created")
     
@@ -228,28 +248,34 @@ class RLEnvironment(Node):
         # Subscribe to joint states
         self.joint_state_sub = self.create_subscription(
             JointState,
-            '/joint_states',
+            self.motion_backend.joint_state_topic,
             self._joint_state_callback,
             10
         )
         
-        # Subscribe to model states (target sphere)
-        self.model_state_sub = self.create_subscription(
-            ModelStates,
-            '/gazebo/model_states',
-            self._model_state_callback,
-            10
-        )
+        if self.motion_backend.uses_gazebo_model_states:
+            self.model_state_sub = self.create_subscription(
+                ModelStates,
+                '/gazebo/model_states',
+                self._model_state_callback,
+                10
+            )
+        else:
+            self.model_state_sub = None
         
         self.get_logger().info("✅ State subscribers initialized!")
     
-    def enable_board_tracking(self):
+    def enable_board_tracking(self, lock_transform: bool = True, use_ideal_rotation: bool = True):
         """Enable board-relative workspace for visual_servoing."""
         self.use_board_tracking = True
         
         # Initialize BoardTransform
         from rl.board_transform import BoardTransform
-        self.board_transform_util = BoardTransform(self.tf_buffer)
+        self.board_transform_util = BoardTransform(
+            self.tf_buffer,
+            lock_transform=lock_transform,
+            use_ideal_rotation=use_ideal_rotation,
+        )
         
         # Subscribe to board pose
         self.board_sub = self.create_subscription(
@@ -257,7 +283,11 @@ class RLEnvironment(Node):
             self._board_callback, 10
         )
         
-        self.get_logger().info("Board tracking enabled - subscribing to /vision/board_pose")
+        tracking_mode = 'static_locked' if lock_transform else 'continuous'
+        self.get_logger().info(
+            f"Board tracking enabled - subscribing to /vision/board_pose "
+            f"(mode={tracking_mode}, ideal_rotation={use_ideal_rotation})"
+        )
     
     def _board_callback(self, msg: PoseStamped):
         """Build board-to-base_link transform from ArUco detection.
@@ -265,10 +295,10 @@ class RLEnvironment(Node):
         Uses BoardTransform to build full 4x4 matrix for converting
         board-local coordinates to base_link frame.
         """
-        if self.board_detected:
-            return  # Already locked
-        
         if self.board_transform_util is None:
+            return
+        
+        if self.board_transform_util.lock_transform and self.board_transform_util.locked and self.board_detected:
             return
         
         success = self.board_transform_util.update_from_pose(msg)
@@ -284,10 +314,19 @@ class RLEnvironment(Node):
         center = self.board_transform_util.get_board_center_base()
         self.workspace_center = center
         
-        self.get_logger().info(
-            f"Board LOCKED (board->base_link transform ready)\n"
-            f"   Center at base_link: [{center[0]:.3f}, {center[1]:.3f}, {center[2]:.3f}]"
-        )
+        if self.board_transform_util.lock_transform:
+            self.get_logger().info(
+                f"Board LOCKED (board->base_link transform ready)\n"
+                f"   Center at base_link: [{center[0]:.3f}, {center[1]:.3f}, {center[2]:.3f}]"
+            )
+        else:
+            now = time.time()
+            if now - self.last_board_status_log_time >= 5.0:
+                self.last_board_status_log_time = now
+                self.get_logger().info(
+                    f"Board updated (continuous tracking)\n"
+                    f"   Center at base_link: [{center[0]:.3f}, {center[1]:.3f}, {center[2]:.3f}]"
+                )
     
     def wait_for_initial_detection(self, timeout=10.0):
         """Wait for initial board detection (visual_servoing mode)."""
@@ -314,24 +353,13 @@ class RLEnvironment(Node):
     
     def _joint_state_callback(self, msg: JointState):
         """Update joint positions and velocities for 6-DOF robot"""
-        joint_names = ['Revolute 20', 'Revolute 22', 'Revolute 23', 'Revolute 26', 'Revolute 28', 'Revolute 30']
-        positions = [0.0] * 6
-        velocities = [0.0] * 6
-        found_all = True
+        try:
+            positions, velocities, found_all = self.motion_backend.extract_joint_state(msg)
+        except Exception as e:
+            self.get_logger().warn(f"Error reading joint state: {e}", throttle_duration_sec=5.0)
+            return
         
-        for idx, joint_name in enumerate(joint_names):
-            if joint_name in msg.name:
-                jidx = msg.name.index(joint_name)
-                try:
-                    positions[idx] = msg.position[jidx]
-                    velocities[idx] = msg.velocity[jidx] if len(msg.velocity) > jidx else 0.0
-                except Exception as e:
-                    self.get_logger().warn(f"Error reading joint {joint_name}: {e}", throttle_duration_sec=5.0)
-                    found_all = False
-            else:
-                found_all = False
-        
-        self.joint_positions = np.array(positions)
+        self.joint_positions = positions
         self.joint_velocities = velocities
         
         if found_all:
@@ -391,9 +419,6 @@ class RLEnvironment(Node):
                     f"Both TF and FK failed: TF={e}, FK={fk_err}",
                     throttle_duration_sec=5.0
                 )
-    
-    # NOTE: Target sphere spawning is now handled by target_manager.py node
-    # This node uses Ignition Transport to spawn and teleport the visual sphere
     
     def get_state(self) -> Optional[np.ndarray]:
         """Get current 16D state vector for RL agent."""
@@ -477,7 +502,7 @@ class RLEnvironment(Node):
             offset_x = random.uniform(-WORKSPACE_RADIUS, WORKSPACE_RADIUS)
             offset_y = random.uniform(-WORKSPACE_RADIUS, WORKSPACE_RADIUS)
             
-            if self.board_transform_util is not None and self.board_transform_util.locked:
+            if self.board_transform_util is not None and self.board_transform_util.is_ready:
                 # Transform board-local point to base_link
                 board_pt = np.array([[offset_x, offset_y, 0.0, 1.0]])
                 base_pt = self.board_transform_util.board_to_base(board_pt)[0]
@@ -504,7 +529,7 @@ class RLEnvironment(Node):
         # Publish to camera overlay (visual_servoing mode)
         target_msg = Point(x=self.target_x, y=self.target_y, z=self.target_z)
         self.rl_target_pub.publish(target_msg)
-        # Publish target position to target_manager node (teleports visual sphere)
+        # Publish target position for optional external visualizers.
         try:
             target_msg = Point()
             target_msg.x = self.target_x
@@ -541,8 +566,8 @@ class RLEnvironment(Node):
         # Clip to internal Gazebo joint limits
         target_joints = np.clip(target_joints, self.gazebo_limits_low, self.gazebo_limits_high)
         
-        # Execute movement - robot moves directly to target in single trajectory
-        success = self._move_to_joint_positions(target_joints, duration=1.0)
+        # Execute movement — duration auto-scaled to real servo speed
+        success = self._move_to_joint_positions(target_joints)
         
         # Wait for movement to complete and state to update
         time.sleep(0.3)
@@ -604,38 +629,13 @@ class RLEnvironment(Node):
         
         return reward, done
     
-    def _stream_joint_positions(self, target_positions: np.ndarray, duration: float = 0.01) -> bool:
+    def _move_to_joint_positions(self, target_positions: np.ndarray, duration: float = None) -> bool:
         """
-        Ultra-fast direct topic publisher. Completely bypasses Action Server overhead.
-        Designed strictly for 100Hz+ streaming micro-movements (like PID tuning).
-        """
-        from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
-        
-        target_positions = np.clip(target_positions, self.gazebo_limits_low, self.gazebo_limits_high)
-        
-        goal_msg = JointTrajectory()
-        goal_msg.joint_names = ['Revolute 20', 'Revolute 22', 'Revolute 23', 'Revolute 26', 'Revolute 28', 'Revolute 30']
-        goal_msg.header.stamp = self.get_clock().now().to_msg()
-        
-        point = JointTrajectoryPoint()
-        point.positions = target_positions.tolist()
-        point.velocities = [0.0] * 6
-        
-        sec = int(duration)
-        nanosec = int((duration - sec) * 1e9)
-        point.time_from_start = Duration(sec=sec, nanosec=nanosec)
-        
-        goal_msg.points = [point]
-        self.fast_trajectory_pub.publish(goal_msg)
-        return True
-    
-    def _move_to_joint_positions(self, target_positions: np.ndarray, duration: float = 0.5) -> bool:
-        """
-        Move robot to specified joint positions
+        Move robot to specified joint positions via the configured backend.
         
         Args:
-            joint_angles: Target joint angles [6] in radians
-            duration: Trajectory duration in seconds
+            target_positions: Target joint angles [6] in radians
+            duration: Trajectory duration in seconds (None = auto from servo speed)
         
         Returns:
             True if movement successful
@@ -643,52 +643,32 @@ class RLEnvironment(Node):
         if len(target_positions) != 6:
             self.get_logger().error(f"Expected 6 joint angles, got {len(target_positions)}")
             return False
-        
-        # Clip to joint limits
-        target_positions = np.clip(target_positions, self.gazebo_limits_low, self.gazebo_limits_high)
-        
-        # Create trajectory goal
-        goal_msg = FollowJointTrajectory.Goal()
-        goal_msg.trajectory.joint_names = ['Revolute 20', 'Revolute 22', 'Revolute 23', 'Revolute 26', 'Revolute 28', 'Revolute 30']
-        
-        # Create trajectory point
-        point = JointTrajectoryPoint()
-        point.positions = target_positions.tolist()
-        point.velocities = [0.0] * 6
-        # Set trajectory duration based on the argument parameter
-        sec = int(duration)
-        nanosec = int((duration - sec) * 1e9)
-        point.time_from_start = Duration(sec=sec, nanosec=nanosec)
-        
-        goal_msg.trajectory.points = [point]
-        
-        # Send goal and wait
-        try:
-            self.get_logger().info(f"Sending trajectory: {np.degrees(target_positions).astype(int)}°")
-            
-            send_goal_future = self.trajectory_client.send_goal_async(goal_msg)
-            rclpy.spin_until_future_complete(self, send_goal_future, timeout_sec=2.0)
-            
-            goal_handle = send_goal_future.result()
-            if not goal_handle.accepted:
-                self.get_logger().error("Goal rejected by action server")
-                return False
-            
-            # Wait for result
-            result_future = goal_handle.get_result_async()
-            rclpy.spin_until_future_complete(self, result_future, timeout_sec=duration + 2.0)
-            
-            result = result_future.result()
-            if result:
-                # Wait for robot to settle
-                time.sleep(0.2)
-                return True
-            else:
-                return False
-                
-        except Exception as e:
-            self.get_logger().error(f"Trajectory execution error: {e}")
-            return False
+        return self.motion_backend.move_to_joint_positions(target_positions, duration=duration)
+
+    def _stream_joint_positions(self, target_positions: np.ndarray, duration: float = 0.01) -> bool:
+        """Dispatch high-rate streaming commands through the configured backend."""
+        return self.motion_backend.stream_joint_positions(target_positions, duration=duration)
+
+    def _estimate_real_duration(self, target_positions: np.ndarray) -> float:
+        """Estimate movement duration using the active backend's timing model."""
+        return self.motion_backend.estimate_real_duration(target_positions)
+
+    def home(self, duration: float = 2.0) -> bool:
+        """Return the robot to home through the configured backend."""
+        return self.motion_backend.home(duration=duration)
+
+    def export_pi_replay_plan(self, joint_samples_rad, sample_dt: float) -> dict:
+        """Downsample a joint command trace into a Pi-safe replay artifact."""
+        return self.motion_backend.mapper.export_pi_replay_plan(
+            joint_samples_rad=joint_samples_rad,
+            sample_dt=sample_dt,
+            joint_limits_low=self.gazebo_limits_low,
+            joint_limits_high=self.gazebo_limits_high,
+        )
+
+    def replay_exported_plan(self, replay_plan: dict, label: str = 'replay') -> bool:
+        """Replay a previously exported Pi-safe trajectory on hardware if supported."""
+        return self.motion_backend.replay_exported_plan(replay_plan, label=label)
 
 
 def main(args=None):

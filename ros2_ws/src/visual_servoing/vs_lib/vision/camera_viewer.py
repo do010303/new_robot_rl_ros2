@@ -13,9 +13,11 @@ import os
 # Suppress C++ TF_OLD_DATA warnings from buffer_core.cpp
 # These are caused by Gazebo sim-time clock mismatches and are harmless
 os.environ['TF2_CPP_LOGGING_LEVEL'] = 'ERROR'
+os.environ['TF_CPP_LOG_LEVEL'] = 'ERROR'
 
 import rclpy
 from rclpy.node import Node
+from rclpy.clock import JumpThreshold
 import cv2
 import numpy as np
 import time
@@ -42,6 +44,14 @@ class CameraViewer(Node):
         # TF2 for coordinate transform
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+        self._tf_clock_jump_callback = self.get_clock().create_jump_callback(
+            JumpThreshold(
+                min_forward=Duration(seconds=3600.0),
+                min_backward=Duration(seconds=-1.0),
+                on_clock_change=True,
+            ),
+            post_callback=self._handle_tf_time_jump,
+        )
         
         # Suppress TF2 C++ warnings (TF_OLD_DATA from sim-time clock mismatch)
         tf2_logger = logging.getLogger('tf2_ros')
@@ -70,6 +80,12 @@ class CameraViewer(Node):
         self.frame_count = 0
         self.fps_start_time = time.time()
         self.fps = 0.0
+        self.startup_time = time.time()
+        self.tf_ready = False
+        self.STARTUP_GRACE_SEC = 3.0
+        self.last_base_lookup_time = 0.0
+        self.base_lookup_period = 0.2
+        self.cached_base_coords = None
         
         # Subscribers - Board detection
         self.create_subscription(
@@ -92,6 +108,18 @@ class CameraViewer(Node):
             Bool, '/rl/reset_trajectory', self.reset_trajectory_callback, 10)
         
         self.get_logger().info("Camera Viewer with RL Overlay started")
+
+    def _handle_tf_time_jump(self, _jump_info):
+        """Clear cached TF state when sim time jumps backward or clock changes."""
+        try:
+            self.tf_buffer.clear()
+        except Exception:
+            return
+
+        self.tf_ready = False
+        self.last_base_lookup_time = 0.0
+        self.cached_base_coords = None
+        self.get_logger().warn("⏱️ Sim-time jump detected — cleared CameraViewer TF buffer")
     
     def info_callback(self, msg):
         """Get camera intrinsics for drawing axes."""
@@ -117,10 +145,20 @@ class CameraViewer(Node):
             self.pen_trajectory.pop(0)
     
     def shape_callback(self, msg):
-        """Receive full shape waypoints [x0,y0,z0, x1,y1,z1, ...]."""
+        """Receive full shape waypoints as flat XYZ or XYZW arrays."""
         data = msg.data
         if len(data) >= 6:  # At least 2 points
-            self.shape_waypoints = np.array(data).reshape(-1, 3)
+            arr = np.array(data, dtype=np.float64)
+            if len(arr) % 3 == 0:
+                self.shape_waypoints = arr.reshape(-1, 3)
+            elif len(arr) % 4 == 0:
+                self.shape_waypoints = arr.reshape(-1, 4)[:, :3]
+            else:
+                self.get_logger().warn(
+                    f"Unexpected shape waypoint payload length: {len(arr)}",
+                    throttle_duration_sec=5.0,
+                )
+                return
             self.get_logger().info(f"Shape received: {len(self.shape_waypoints)} waypoints")
     
     def reset_trajectory_callback(self, msg):
@@ -204,27 +242,42 @@ class CameraViewer(Node):
             cv2.putText(cv_image, f"cam=({pos.x:.3f},{pos.y:.3f},{pos.z:.3f})", 
                        (10, y0), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
             
-            # Transform to base_link and show
-            try:
-                transform = self.tf_buffer.lookup_transform(
-                    'base_link', self.board_pose.header.frame_id,
-                    rclpy.time.Time(seconds=0), timeout=Duration(seconds=0, nanoseconds=50000000))
-                t = transform.transform.translation
-                r = transform.transform.rotation
-                qx, qy, qz, qw = r.x, r.y, r.z, r.w
-                rot = np.array([
-                    [1-2*(qy*qy+qz*qz), 2*(qx*qy-qz*qw), 2*(qx*qz+qy*qw)],
-                    [2*(qx*qy+qz*qw), 1-2*(qx*qx+qz*qz), 2*(qy*qz-qx*qw)],
-                    [2*(qx*qz-qy*qw), 2*(qy*qz+qx*qw), 1-2*(qx*qx+qy*qy)]
-                ])
-                pt = rot @ np.array([pos.x, pos.y, pos.z]) + np.array([t.x, t.y, t.z])
+            # Transform to base_link and show (throttled to avoid TF spam during sim-time churn)
+            elapsed = time.time() - self.startup_time
+            if elapsed >= self.STARTUP_GRACE_SEC:
+                now_wall = time.time()
+                if (not self.tf_ready) or (now_wall - self.last_base_lookup_time >= self.base_lookup_period):
+                    self.last_base_lookup_time = now_wall
+                    try:
+                        transform = self.tf_buffer.lookup_transform(
+                            'base_link', self.board_pose.header.frame_id,
+                            rclpy.time.Time(seconds=0), timeout=Duration(seconds=0, nanoseconds=50000000))
+                        t = transform.transform.translation
+                        r = transform.transform.rotation
+                        qx, qy, qz, qw = r.x, r.y, r.z, r.w
+                        rot = np.array([
+                            [1-2*(qy*qy+qz*qz), 2*(qx*qy-qz*qw), 2*(qx*qz+qy*qw)],
+                            [2*(qx*qy+qz*qw), 1-2*(qx*qx+qz*qz), 2*(qy*qz-qx*qw)],
+                            [2*(qx*qz-qy*qw), 2*(qy*qz+qx*qw), 1-2*(qx*qx+qy*qy)]
+                        ])
+                        pt = rot @ np.array([pos.x, pos.y, pos.z]) + np.array([t.x, t.y, t.z])
+                        self.cached_base_coords = pt
+                        self.tf_ready = True
+                    except Exception:
+                        pass
+
                 y0 += dy
-                cv2.putText(cv_image, f"base=({pt[0]:.3f},{pt[1]:.3f},{pt[2]:.3f})", 
-                           (10, y0), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
-            except Exception:
+                if self.cached_base_coords is not None:
+                    pt = self.cached_base_coords
+                    cv2.putText(cv_image, f"base=({pt[0]:.3f},{pt[1]:.3f},{pt[2]:.3f})",
+                               (10, y0), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2)
+                else:
+                    cv2.putText(cv_image, "base=(TF2 pending...)",
+                               (10, y0), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 255), 2)
+            else:
                 y0 += dy
-                cv2.putText(cv_image, "base=(TF2 pending...)", 
-                           (10, y0), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 255), 2)
+                cv2.putText(cv_image, "base=(TF2 warming up...)",
+                           (10, y0), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 165, 255), 2)
         
         # NOTE: Shape/target/pen visualization handled by gazebo_visualizer.py
         # (spawns 3D entities in Gazebo that camera sees naturally)

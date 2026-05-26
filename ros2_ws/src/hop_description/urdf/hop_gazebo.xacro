@@ -1,0 +1,282 @@
+<?xml version="1.0" ?>
+<robot name="hop" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- ==================== Gazebo Harmonic (gz-sim8) Plugins ==================== -->
+
+  <!-- Gazebo material colors (URDF materials don't transfer to SDF automatically) -->
+  <gazebo reference="base_link">
+    <visual>
+      <material>
+        <ambient>0.97 0.97 0.93 1.0</ambient>
+        <diffuse>0.97 0.97 0.93 1.0</diffuse>
+      </material>
+    </visual>
+  </gazebo>
+
+  <gazebo reference="frame_arm_1_1">
+    <visual>
+      <material>
+        <ambient>0.97 0.97 0.93 1.0</ambient>
+        <diffuse>0.97 0.97 0.93 1.0</diffuse>
+      </material>
+    </visual>
+  </gazebo>
+
+  <gazebo reference="frame_arm_2_1">
+    <visual>
+      <material>
+        <ambient>0.97 0.97 0.93 1.0</ambient>
+        <diffuse>0.97 0.97 0.93 1.0</diffuse>
+      </material>
+    </visual>
+  </gazebo>
+
+  <gazebo reference="frame_arm_3_1">
+    <visual>
+      <material>
+        <ambient>0.97 0.97 0.93 1.0</ambient>
+        <diffuse>0.97 0.97 0.93 1.0</diffuse>
+      </material>
+    </visual>
+  </gazebo>
+
+  <gazebo reference="frame_arm_4_1">
+    <visual>
+      <material>
+        <ambient>0.97 0.97 0.93 1.0</ambient>
+        <diffuse>0.97 0.97 0.93 1.0</diffuse>
+      </material>
+    </visual>
+  </gazebo>
+
+  <gazebo reference="frame_mount_1">
+    <visual>
+      <material>
+        <ambient>0.63 0.63 0.63 1.0</ambient>
+        <diffuse>0.63 0.63 0.63 1.0</diffuse>
+      </material>
+    </visual>
+  </gazebo>
+
+  <gazebo reference="motor_1_1">
+    <visual>
+      <material>
+        <ambient>0.63 0.63 0.63 1.0</ambient>
+        <diffuse>0.63 0.63 0.63 1.0</diffuse>
+      </material>
+    </visual>
+  </gazebo>
+
+  <gazebo reference="motor_2_1">
+    <visual>
+      <material>
+        <ambient>0.63 0.63 0.63 1.0</ambient>
+        <diffuse>0.63 0.63 0.63 1.0</diffuse>
+      </material>
+    </visual>
+  </gazebo>
+
+  <gazebo reference="motor_3_1">
+    <visual>
+      <material>
+        <ambient>0.63 0.63 0.63 1.0</ambient>
+        <diffuse>0.63 0.63 0.63 1.0</diffuse>
+      </material>
+    </visual>
+  </gazebo>
+
+  <gazebo reference="motor_4_1">
+    <visual>
+      <material>
+        <ambient>0.63 0.63 0.63 1.0</ambient>
+        <diffuse>0.63 0.63 0.63 1.0</diffuse>
+      </material>
+    </visual>
+  </gazebo>
+
+  <gazebo reference="robotic_arm_rotor_1_1">
+    <visual>
+      <material>
+        <ambient>0.08 0.08 0.08 1.0</ambient>
+        <diffuse>0.08 0.08 0.08 1.0</diffuse>
+      </material>
+    </visual>
+  </gazebo>
+
+  <gazebo reference="robotic_arm_rotor_2_1">
+    <visual>
+      <material>
+        <ambient>0.08 0.08 0.08 1.0</ambient>
+        <diffuse>0.08 0.08 0.08 1.0</diffuse>
+      </material>
+    </visual>
+  </gazebo>
+
+  <gazebo reference="robotic_arm_rotor_3_1">
+    <visual>
+      <material>
+        <ambient>0.08 0.08 0.08 1.0</ambient>
+        <diffuse>0.08 0.08 0.08 1.0</diffuse>
+      </material>
+    </visual>
+  </gazebo>
+
+  <gazebo reference="robotic_arm_link_1_1">
+    <visual>
+      <material>
+        <ambient>0.85 0.85 0.85 1.0</ambient>
+        <diffuse>0.85 0.85 0.85 1.0</diffuse>
+      </material>
+    </visual>
+  </gazebo>
+
+  <gazebo reference="robotic_arm_link_2_1">
+    <visual>
+      <material>
+        <ambient>0.85 0.85 0.85 1.0</ambient>
+        <diffuse>0.85 0.85 0.85 1.0</diffuse>
+      </material>
+    </visual>
+  </gazebo>
+
+  <gazebo reference="robotic_arm_link_3_1">
+    <visual>
+      <material>
+        <ambient>0.95 0.95 0.95 1.0</ambient>
+        <diffuse>0.95 0.95 0.95 1.0</diffuse>
+      </material>
+    </visual>
+  </gazebo>
+
+  <gazebo reference="robotic_arm_link_4_1">
+    <visual>
+      <material>
+        <ambient>0.70 0.70 0.70 1.0</ambient>
+        <diffuse>0.70 0.70 0.70 1.0</diffuse>
+      </material>
+    </visual>
+  </gazebo>
+
+  <gazebo reference="robotic_arm_link_5_1">
+    <visual>
+      <material>
+        <ambient>0.70 0.70 0.70 1.0</ambient>
+        <diffuse>0.70 0.70 0.70 1.0</diffuse>
+      </material>
+    </visual>
+  </gazebo>
+
+  <gazebo reference="robotic_arm_link_6_1">
+    <visual>
+      <material>
+        <ambient>0.85 0.85 0.85 1.0</ambient>
+        <diffuse>0.85 0.85 0.85 1.0</diffuse>
+      </material>
+    </visual>
+  </gazebo>
+
+  <gazebo reference="rotor_1_1">
+    <visual>
+      <material>
+        <ambient>0.80 0.80 0.80 1.0</ambient>
+        <diffuse>0.80 0.80 0.80 1.0</diffuse>
+      </material>
+    </visual>
+  </gazebo>
+
+  <gazebo reference="rotor_2_1">
+    <visual>
+      <material>
+        <ambient>0.80 0.80 0.80 1.0</ambient>
+        <diffuse>0.80 0.80 0.80 1.0</diffuse>
+      </material>
+    </visual>
+  </gazebo>
+
+  <gazebo reference="rotor_3_1">
+    <visual>
+      <material>
+        <ambient>0.80 0.80 0.80 1.0</ambient>
+        <diffuse>0.80 0.80 0.80 1.0</diffuse>
+      </material>
+    </visual>
+  </gazebo>
+
+  <gazebo reference="rotor_4_1">
+    <visual>
+      <material>
+        <ambient>0.80 0.80 0.80 1.0</ambient>
+        <diffuse>0.80 0.80 0.80 1.0</diffuse>
+      </material>
+    </visual>
+  </gazebo>
+
+  <!-- ==================== Gazebo Harmonic System Plugins ==================== -->
+
+  <gazebo>
+    <!-- Joint State Publisher: publishes joint states to Gazebo topics -->
+    <plugin filename="gz-sim-joint-state-publisher-system"
+            name="gz::sim::systems::JointStatePublisher">
+      <joint_name>arm_joint_1</joint_name>
+      <joint_name>arm_joint_2</joint_name>
+      <joint_name>arm_joint_3</joint_name>
+      <joint_name>arm_joint_4</joint_name>
+      <joint_name>arm_joint_5</joint_name>
+      <joint_name>arm_joint_6</joint_name>
+      <joint_name>rotor_joint_1</joint_name>
+      <joint_name>rotor_joint_2</joint_name>
+      <joint_name>rotor_joint_3</joint_name>
+      <joint_name>rotor_joint_4</joint_name>
+    </plugin>
+
+    <!-- Joint Position Controller for robotic arm joints -->
+    <plugin filename="gz-sim-joint-position-controller-system"
+            name="gz::sim::systems::JointPositionController">
+      <joint_name>arm_joint_1</joint_name>
+      <p_gain>1.0</p_gain>
+      <i_gain>0.0</i_gain>
+      <d_gain>0.1</d_gain>
+    </plugin>
+
+    <plugin filename="gz-sim-joint-position-controller-system"
+            name="gz::sim::systems::JointPositionController">
+      <joint_name>arm_joint_2</joint_name>
+      <p_gain>1.0</p_gain>
+      <i_gain>0.0</i_gain>
+      <d_gain>0.1</d_gain>
+    </plugin>
+
+    <plugin filename="gz-sim-joint-position-controller-system"
+            name="gz::sim::systems::JointPositionController">
+      <joint_name>arm_joint_3</joint_name>
+      <p_gain>1.0</p_gain>
+      <i_gain>0.0</i_gain>
+      <d_gain>0.1</d_gain>
+    </plugin>
+
+    <plugin filename="gz-sim-joint-position-controller-system"
+            name="gz::sim::systems::JointPositionController">
+      <joint_name>arm_joint_4</joint_name>
+      <p_gain>0.5</p_gain>
+      <i_gain>0.0</i_gain>
+      <d_gain>0.05</d_gain>
+    </plugin>
+
+    <plugin filename="gz-sim-joint-position-controller-system"
+            name="gz::sim::systems::JointPositionController">
+      <joint_name>arm_joint_5</joint_name>
+      <p_gain>0.5</p_gain>
+      <i_gain>0.0</i_gain>
+      <d_gain>0.05</d_gain>
+    </plugin>
+
+    <plugin filename="gz-sim-joint-position-controller-system"
+            name="gz::sim::systems::JointPositionController">
+      <joint_name>arm_joint_6</joint_name>
+      <p_gain>0.5</p_gain>
+      <i_gain>0.0</i_gain>
+      <d_gain>0.05</d_gain>
+    </plugin>
+  </gazebo>
+
+</robot>

@@ -10,22 +10,24 @@ Change POINTS_PER_EDGE to scale waypoint density.
 # WAYPOINT CONFIGURATION
 # =============================================================================
 
-# Number of waypoints per edge of the triangle
-# Total waypoints = POINTS_PER_EDGE * 3 + 1 (for return to start)
+# Number of waypoints per edge of the triangle-like shapes
+# Total waypoints for triangle / rounded_triangle = POINTS_PER_EDGE * 3 + 1
 # Examples:
 #   POINTS_PER_EDGE = 1  → 4 waypoints (3 corners + 1 return)
 #   POINTS_PER_EDGE = 3  → 10 waypoints (9 + 1 return)
-POINTS_PER_EDGE = 7  # 10 waypoints total
+POINTS_PER_EDGE = 6  # 25 waypoints total for square shape (24 segments + return)
 
 # Shape type
-SHAPE_TYPE = 'triangle'
+SHAPE_TYPE = 'square'
 
 # Computed total waypoints
 if SHAPE_TYPE == 'square':
     # 4 edges * points + 1 return
-    TOTAL_WAYPOINTS = POINTS_PER_EDGE * 4 + 1  
+    TOTAL_WAYPOINTS = POINTS_PER_EDGE * 4 + 1
+elif SHAPE_TYPE == 'line':
+    TOTAL_WAYPOINTS = 2
 else:
-    # 3 edges * points + 1 return (triangle)
+    # triangle-like closed shapes and circle benchmark
     TOTAL_WAYPOINTS = POINTS_PER_EDGE * 3 + 1
 
 # =============================================================================
@@ -33,19 +35,19 @@ else:
 # =============================================================================
 
 # Square size (side length in meters)
-SHAPE_SIZE = 0.10  # 10cm sides requested by user
+SHAPE_SIZE = 0.10  # 10cm sides
 
-# X-plane (drawing surface - set dynamically by ArUco detection)
-X_PLANE = 0.50  # Default ~0.50m (forward from UAV base)
+# Default fallback board center in base_link coordinates.
+# The physical/sim board is in front of the robot at negative X in base_link.
+X_PLANE = -0.50
 USE_DYNAMIC_WORKSPACE = True  # Enable dynamic centering on detected board
 
 # Shape center position - set dynamically from board detection
 # Default fallback if no board detected
-# X=0.5 (forward), Y=0.0m (center), Z=0.35m (height of the vertical board)
-TRIANGLE_CENTER = (0.50, 0.0, 0.35)  
+TRIANGLE_CENTER = (X_PLANE, 0.0, 0.60)
 
 # Workspace radius (safe drawing area from center)
-WORKSPACE_RADIUS = 0.07  # 7cm radius (14cm diameter) to fit 10cm shape
+WORKSPACE_RADIUS = 0.12  # 12cm radius (24cm diameter) comfortably fits 10cm shape
 
 # =============================================================================
 # TRAINING PARAMETERS
@@ -72,6 +74,10 @@ def validate_config():
     assert SHAPE_SIZE > 0, "SHAPE_SIZE must be positive"
     assert WAYPOINT_TOLERANCE > 0, "WAYPOINT_TOLERANCE must be positive"
     assert WORKSPACE_RADIUS > 0, "WORKSPACE_RADIUS must be positive"
+    assert SHAPE_TYPE in {
+        'triangle', 'rounded_triangle', 'dense_triangle',
+        'square', 'line', 'random_triangle', 'circle'
+    }, f"Unsupported SHAPE_TYPE: {SHAPE_TYPE}"
     print(f"✅ Drawing config validated: {get_waypoint_info()}")
     if USE_DYNAMIC_WORKSPACE:
         print(f"   Dynamic workspace enabled (Y_PLANE from ArUco detection)")
@@ -79,4 +85,3 @@ def validate_config():
 # Auto-validate on import
 if __name__ != "__main__":
     validate_config()
-

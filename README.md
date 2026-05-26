@@ -43,6 +43,16 @@ ros2_ws/src/visual_servoing/
 
 ## Quick start (simulation)
 
+Prepare Python first. The RL/drawing stack uses SciPy, Gymnasium, Torch, Matplotlib, and OpenCV ArUco on top of ROS 2:
+
+```bash
+cd /home/ducanh/new_rl_ros2
+python3 -m venv --system-site-packages .venv
+source .venv/bin/activate
+pip install -U pip
+pip install -r ros2_ws/src/visual_servoing/requirements.txt
+```
+
 Build:
 
 ```bash
@@ -60,9 +70,24 @@ ros2 launch visual_servoing visual_servoing_test.launch.py
 Run training menu (separate terminal):
 
 ```bash
+cd /home/ducanh/new_rl_ros2
+source .venv/bin/activate
 cd ros2_ws/src/visual_servoing/scripts
 python3 train_visual_servoing.py
 ```
+
+## Square PID training
+
+The most reliable square-learning path in the current codebase is:
+
+1. Launch Gazebo with `ros2 launch visual_servoing visual_servoing_test.launch.py`
+2. Run `python3 train_visual_servoing.py`
+3. Choose `7` for PID tuning
+4. Choose `b` for drawing
+5. Choose backend `a` for `sim`
+6. Answer `n` to live board detection unless your camera pipeline is already publishing `/vision/board_pose`
+
+Without live board detection, the drawing environment now uses a deterministic fallback board plane in `base_link` at roughly `[-0.50, 0.0, 0.60]` instead of leaving square waypoints in raw board-local coordinates near the origin.
 
 ## Digital Twin (Sim-to-Real)
 

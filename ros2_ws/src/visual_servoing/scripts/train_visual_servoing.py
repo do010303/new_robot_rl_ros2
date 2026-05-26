@@ -8,18 +8,25 @@ Usage:
 """
 
 import os
+import sys
+import tempfile
 # Suppress C++ TF_OLD_DATA warnings (harmless sim-time clock mismatch)
 # Must be set BEFORE importing rclpy/tf2_ros
 os.environ['TF2_CPP_LOGGING_LEVEL'] = 'ERROR'
+os.environ['TF_CPP_LOG_LEVEL'] = 'ERROR'
+_mpl_cache_dir = os.path.join(tempfile.gettempdir(), 'visual_servoing_mpl')
+os.makedirs(_mpl_cache_dir, exist_ok=True)
+os.environ.setdefault('MPLCONFIGDIR', _mpl_cache_dir)
 
 import rclpy
 import numpy as np
 import argparse
 import time
+import copy
 from datetime import datetime
+import torch
 
 # Import RL components
-import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from rl.rl_environment import RLEnvironment
@@ -28,6 +35,7 @@ from rl.drawing_environment import DrawingEnvironment  # Import Drawing Environm
 from agents.sac_agent import SACAgentGazebo
 from utils.her import her_augmentation
 from rl.neural_ik import NeuralIK
+from rl.control_backends import SUPPORTED_CONTROL_BACKENDS, resolve_control_backend
 # PIDController removed - not used in training
 
 import matplotlib
@@ -129,6 +137,51 @@ def _latest_file(directory: str, pattern: str):
     return files[0]
 
 
+def _capture_sac_snapshot(agent):
+    """Capture an in-memory SAC snapshot for fast rollback after divergence."""
+    snapshot = {
+        'actor': copy.deepcopy(agent.actor.state_dict()),
+        'critic1': copy.deepcopy(agent.critic1.state_dict()),
+        'critic2': copy.deepcopy(agent.critic2.state_dict()),
+        'critic1_target': copy.deepcopy(agent.critic1_target.state_dict()),
+        'critic2_target': copy.deepcopy(agent.critic2_target.state_dict()),
+        'actor_opt': copy.deepcopy(agent.actor_optimizer.state_dict()),
+        'critic1_opt': copy.deepcopy(agent.critic1_optimizer.state_dict()),
+        'critic2_opt': copy.deepcopy(agent.critic2_optimizer.state_dict()),
+        'total_it': int(agent.total_it),
+    }
+    if agent.auto_entropy_tuning:
+        snapshot['log_alpha'] = agent.log_alpha.detach().clone()
+        snapshot['alpha'] = float(agent.alpha)
+        snapshot['alpha_opt'] = copy.deepcopy(agent.alpha_optimizer.state_dict())
+    return snapshot
+
+
+def _restore_sac_snapshot(agent, snapshot):
+    """Restore SAC networks/optimizers from an in-memory snapshot."""
+    if not snapshot:
+        return
+
+    agent.actor.load_state_dict(snapshot['actor'])
+    agent.critic1.load_state_dict(snapshot['critic1'])
+    agent.critic2.load_state_dict(snapshot['critic2'])
+    agent.critic1_target.load_state_dict(snapshot['critic1_target'])
+    agent.critic2_target.load_state_dict(snapshot['critic2_target'])
+    agent.actor_optimizer.load_state_dict(snapshot['actor_opt'])
+    agent.critic1_optimizer.load_state_dict(snapshot['critic1_opt'])
+    agent.critic2_optimizer.load_state_dict(snapshot['critic2_opt'])
+    agent.total_it = int(snapshot.get('total_it', agent.total_it))
+
+    if agent.auto_entropy_tuning and 'log_alpha' in snapshot:
+        agent.log_alpha.data.copy_(snapshot['log_alpha'].to(agent.device))
+        agent.alpha = float(snapshot['alpha'])
+        agent.alpha_optimizer.load_state_dict(snapshot['alpha_opt'])
+
+    agent.actor.train()
+    agent.critic1.train()
+    agent.critic2.train()
+
+
 # ============================================================================
 # TRAINING LOOP
 # ============================================================================
@@ -152,12 +205,19 @@ def train(args):
         print(f"   Max steps: {args.max_steps}")
         env = RLEnvironment(
             max_episode_steps=args.max_steps,
-            goal_tolerance=GOAL_THRESHOLD
+            goal_tolerance=GOAL_THRESHOLD,
+            control_backend=getattr(args, 'control_backend', None),
         )
+        if not env.motion_backend.supports_reward_feedback:
+            raise RuntimeError(
+                "The selected backend does not provide authoritative reward feedback for SAC training. "
+                "Use control_backend=sim or sim_to_real_shadow."
+            )
         
-        # Enable board-relative workspace for visual_servoing
-        print("📡 Enabling board-relative workspace...")
-        env.enable_board_tracking()
+        require_board_detection = bool(getattr(args, 'require_board_detection', True))
+        if require_board_detection:
+            print("📡 Enabling board-relative workspace...")
+            env.enable_board_tracking()
         
         # Wait for environment to initialize
         print("   Waiting for environment...")
@@ -166,15 +226,18 @@ def train(args):
             rclpy.spin_once(env, timeout_sec=0.1)
         
         # Wait for initial board detection
-        print("\n⏳ Waiting for ArUco board detection...")
-        if not env.wait_for_initial_detection(timeout=10.0):
-            print("⚠️  WARNING: No board detected! Training will use default workspace.")
-            user_confirm = input("   Continue anyway? (y/n): ").strip().lower()
-            if user_confirm != 'y':
-                print("❌ Training cancelled")
-                return
+        if require_board_detection:
+            print("\n⏳ Waiting for ArUco board detection...")
+            if not env.wait_for_initial_detection(timeout=10.0):
+                print("⚠️  WARNING: No board detected! Training will use default workspace.")
+                user_confirm = input("   Continue anyway? (y/n): ").strip().lower()
+                if user_confirm != 'y':
+                    print("❌ Training cancelled")
+                    return
+            else:
+                print("✅ Board detected - targets will be board-relative")
         else:
-            print("✅ Board detected - targets will be board-relative")
+            print("\n📡 Board detection: optional (skipped)")
         
         # Create agent based on selection
         print(f"\n🤖 Creating {args.agent.upper()} agent...")
@@ -1158,7 +1221,7 @@ def evaluate(env, agent, num_episodes=3):
     return avg_reward, avg_success
 
 
-def manual_control_mode():
+def manual_control_mode(control_backend=None):
     """
     Manual control mode - enter joint angles to move robot.
     Uses the RL environment for robot communication.
@@ -1190,7 +1253,11 @@ def manual_control_mode():
         print("\n📦 Creating environment...")
         
         # Use RLEnvironment but logging implies we want to verify drawing consistency
-        env = RLEnvironment(max_episode_steps=100, goal_tolerance=0.01)
+        env = RLEnvironment(
+            max_episode_steps=100,
+            goal_tolerance=0.01,
+            control_backend=control_backend,
+        )
         
         # Wait for initialization
         time.sleep(2.0)
@@ -1198,6 +1265,11 @@ def manual_control_mode():
             rclpy.spin_once(env, timeout_sec=0.1)
         
         print("✅ Environment ready!")
+        if getattr(env, 'digital_twin_enabled', False):
+            print("🔄 Digital twin sync: ON (sim_to_real_shadow)")
+            print("   Safe whole-move commands can mirror/replay on the Pi")
+        else:
+            print("🔄 Digital twin sync: OFF")
         
         # Import FK for position calculation
         from rl.fk_ik_utils import fk
@@ -1372,9 +1444,10 @@ def show_menu():
     print("5. 🖋️ Drawing Task Training (SAC 6D Direct)")
     print("6. 🖋️ Drawing Task Training (SAC + Neural IK)")
     print("7. 🎛️ PID Tuning (RL-Optimized PID Gains)")
+    print("8. 🚀 Deploy to Pi (Replay saved training on real robot)")
     print("="*70)
     
-    choice = input("Select option (1-7): ").strip()
+    choice = input("Select option (1-8): ").strip()
     return choice
 
 
@@ -1434,6 +1507,69 @@ def get_drawing_params():
     return episodes, max_steps
 
 
+def _latest_matching_file(directory: str, pattern: str):
+    import glob
+
+    files = glob.glob(os.path.join(directory, pattern), recursive=True)
+    if not files:
+        return None
+    files.sort(key=os.path.getmtime, reverse=True)
+    return files[0]
+
+
+def prompt_pid_backend() -> str:
+    """Prompt for the PID tuning backend."""
+    env_default = os.environ.get('VISUAL_SERVOING_CONTROL_BACKEND', 'sim')
+    try:
+        default_backend = resolve_control_backend(env_default)
+    except Exception:
+        default_backend = 'sim'
+
+    print("\n🔧 PID Control Backend:")
+    print("  a. sim")
+    print("  b. sim_to_real_shadow")
+    print("  c. real_replay")
+    raw = input(f"Select (a/b/c, default={default_backend}): ").strip().lower()
+    mapping = {
+        'a': 'sim',
+        'b': 'sim_to_real_shadow',
+        'c': 'real_replay',
+        'sim': 'sim',
+        'sim_to_real_shadow': 'sim_to_real_shadow',
+        'real_replay': 'real_replay',
+        '': default_backend,
+    }
+    return resolve_control_backend(mapping.get(raw, raw))
+
+
+def prompt_pid_replay_paths(mode: str):
+    """Prompt for saved replay artifact + gains file paths."""
+    pkl_dir = os.path.join(os.path.dirname(__file__), 'training_results', 'pkl')
+    checkpoint_root = os.path.join(os.path.dirname(__file__), 'checkpoints')
+
+    artifact_default = _latest_matching_file(pkl_dir, f'pid_best_artifact_*_{mode}_*.pkl')
+    gains_default = _latest_matching_file(checkpoint_root, f'**/best_gains*.json')
+
+    print("\n📦 Real Replay Inputs")
+    if artifact_default:
+        artifact_hint = os.path.basename(artifact_default)
+    else:
+        artifact_hint = 'required'
+    artifact_path = input(f"Artifact path (Enter={artifact_hint}): ").strip()
+    if not artifact_path and artifact_default:
+        artifact_path = artifact_default
+
+    if gains_default:
+        gains_hint = os.path.basename(gains_default)
+    else:
+        gains_hint = 'optional'
+    gains_path = input(f"Gains path (Enter={gains_hint}): ").strip()
+    if not gains_path and gains_default:
+        gains_path = gains_default
+
+    return artifact_path, gains_path
+
+
 def train_drawing(args):
     """
     Training loop for drawing task using DrawingEnvironment.
@@ -1472,8 +1608,15 @@ def train_drawing(args):
             waypoint_tolerance=WAYPOINT_TOLERANCE,
             shape_type=SHAPE_TYPE,  # Uses points_per_edge from config
             shape_size=SHAPE_SIZE,
-            x_plane=X_PLANE
+            x_plane=X_PLANE,
+            use_dynamic_workspace=bool(getattr(args, 'require_board_detection', True)),
+            control_backend=getattr(args, 'control_backend', None),
         )
+        if not env.motion_backend.supports_reward_feedback:
+            raise RuntimeError(
+                "The selected backend does not provide authoritative reward feedback for SAC drawing training. "
+                "Use control_backend=sim or sim_to_real_shadow."
+            )
         
         # Wait for environment
         time.sleep(2.0)
@@ -1481,15 +1624,18 @@ def train_drawing(args):
             rclpy.spin_once(env, timeout_sec=0.1)
         
         # Wait for ArUco board detection
-        print("\n⏳ Waiting for ArUco board detection...")
-        if not env.wait_for_initial_detection(timeout_sec=10.0):
-            print("⚠️  WARNING: No board detected! Shapes will use default position.")
-            user_confirm = input("   Continue anyway? (y/n): ").strip().lower()
-            if user_confirm != 'y':
-                print("❌ Training cancelled")
-                return
+        if getattr(args, 'require_board_detection', True):
+            print("\n⏳ Waiting for ArUco board detection...")
+            if not env.wait_for_initial_detection(timeout_sec=10.0):
+                print("⚠️  WARNING: No board detected! Shapes will use default position.")
+                user_confirm = input("   Continue anyway? (y/n): ").strip().lower()
+                if user_confirm != 'y':
+                    print("❌ Training cancelled")
+                    return
+            else:
+                print("✅ Board detected - shapes will be board-relative")
         else:
-            print("✅ Board detected - shapes will be board-relative")
+            print("\n📡 Board detection: optional (skipped)")
         
         print("✅ Drawing Environment ready!")
         print(f"   Shape: {SHAPE_TYPE} ({TOTAL_WAYPOINTS} waypoints, {POINTS_PER_EDGE} per edge)")
@@ -1887,7 +2033,505 @@ def train_drawing(args):
             except:
                 pass
 
-def train_pid_tuning(mode='reaching'):
+def _run_pid_real_replay(mode='reaching', replay_artifact_path=None, replay_gains_path=None):
+    """Replay a saved PID-tuning artifact on the real robot backend with detailed logging and plotting."""
+    import json
+    import pickle
+    import matplotlib.pyplot as plt
+    from datetime import datetime
+
+    base_env = None
+    ros_initialized = False
+
+    if not replay_artifact_path:
+        raise ValueError("real_replay requires a saved PID replay artifact path")
+    if not os.path.exists(replay_artifact_path):
+        raise FileNotFoundError(f"Replay artifact not found: {replay_artifact_path}")
+
+    try:
+        rclpy.init()
+        ros_initialized = True
+
+        print("\n📦 Creating real replay environment...")
+        base_env = RLEnvironment(
+            max_episode_steps=1,
+            goal_tolerance=0.01,
+            control_backend='real_replay',
+        )
+
+        print("   Waiting for hardware state...")
+        time.sleep(1.0)
+        for _ in range(15):
+            rclpy.spin_once(base_env, timeout_sec=0.1)
+
+        with open(replay_artifact_path, 'rb') as f:
+            artifact = pickle.load(f)
+
+        artifact_mode = artifact.get('mode', mode)
+        if artifact_mode != mode:
+            print(f"⚠️  Artifact mode is '{artifact_mode}', overriding requested '{mode}'")
+            mode = artifact_mode
+
+        # Retrieve replay trajectory from artifact. Prefer the smoothed nominal replay
+        # path if present; fall back to the raw commanded trace for older artifacts.
+        commanded_trajectory_list = artifact.get('replay_trajectory_rad', [])
+        if not commanded_trajectory_list:
+            commanded_trajectory_list = artifact.get('commanded_trajectory_rad', [])
+        if not commanded_trajectory_list:
+            # Fall back to checking if it's in the replay_plan
+            replay_plan = artifact.get('replay_plan', {})
+            segments = replay_plan.get('segments', [])
+            if not segments:
+                print("❌ Artifact has no commanded trajectory or replay plan!")
+                return False
+            commanded_trajectory = []
+            for seg in segments:
+                pos_deg_dict = {name: pos for name, pos in zip(seg['joint_names_pi'], seg['positions_deg'])}
+                pos_rad = np.zeros(len(base_env.motion_backend.mapper.gazebo_joint_names))
+                for gz_idx, gz_name in enumerate(base_env.motion_backend.mapper.gazebo_joint_names):
+                    _, pi_name, home_deg, inverted = base_env.motion_backend.mapper.gazebo_lookup[gz_name]
+                    if pi_name in pos_deg_dict:
+                        pos_rad[gz_idx] = base_env.motion_backend.mapper.pi_deg_to_gazebo_rad(
+                            pos_deg_dict[pi_name], home_deg, inverted
+                        )
+                commanded_trajectory.append(pos_rad)
+        else:
+            commanded_trajectory = [np.array(cmd) for cmd in commanded_trajectory_list]
+
+        dt = float(artifact.get('trajectory_dt_sec', 0.02))
+
+        # Prompt for parameters
+        episodes_input = input("Number of episodes to run (default 5): ").strip()
+        episodes = int(episodes_input) if episodes_input else 5
+
+        rate_input = input("Replay rate Hz (default 5.0, lower=safer): ").strip()
+        replay_rate = float(rate_input) if rate_input else 5.0
+
+        # Generate replay plan
+        new_replay_plan = base_env.motion_backend.mapper.export_pi_replay_plan(
+            joint_samples_rad=commanded_trajectory,
+            sample_dt=dt,
+            joint_limits_low=base_env.gazebo_limits_low,
+            joint_limits_high=base_env.gazebo_limits_high,
+            replay_rate_hz=replay_rate,
+        )
+
+        gains = None
+        if replay_gains_path and os.path.exists(replay_gains_path):
+            with open(replay_gains_path, 'r') as f:
+                gains = json.load(f)
+
+        print("\n▶️ Multi-Episode Deploy to Pi Started")
+        print("=" * 70)
+        print(f"   Artifact: {replay_artifact_path}")
+        print(f"   Mode: {mode}")
+        print(f"   Replay rate: {replay_rate} Hz")
+        print(f"   Episodes: {episodes}")
+        if gains is not None:
+            print(f"   Gains file: {replay_gains_path}")
+            print(f"   Kp: {np.round(gains.get('Kp', []), 3)}")
+            print(f"   Ki: {np.round(gains.get('Ki', []), 3)}")
+            print(f"   Kd: {np.round(gains.get('Kd', []), 3)}")
+        print("=" * 70)
+
+        # Setup Logging
+        log_dir = os.path.join(os.getcwd(), 'training_results', 'logs')
+        os.makedirs(log_dir, exist_ok=True)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        log_path = os.path.join(log_dir, f"deploy_replay_log_{timestamp}.txt")
+        
+        with open(log_path, 'w') as f:
+            f.write(f"=== DEPLOY MULTI-EPISODE REPLAY LOG ===\n")
+            f.write(f"Timestamp: {timestamp}\n")
+            f.write(f"Artifact: {replay_artifact_path}\n")
+            f.write(f"Replay Rate: {replay_rate} Hz\n")
+            f.write(f"Total Episodes: {episodes}\n")
+            f.write(f"Total Segments Per Episode: {len(new_replay_plan['segments'])}\n")
+            f.write("--------------------------------------------------------------------------------\n")
+
+        episode_rewards = []
+        episode_cartesian_mm = []
+        episode_avg_wp_mm = []
+        episode_max_wp_mm = []
+        episode_joint_errors = []
+        episode_durations = []
+        episode_waypoint_errors = []
+        
+        # Accumulate logs for plotting
+        commanded_deg_log_all = []
+        actual_deg_log_all = [] # list of arrays, one per episode
+        time_log = []
+        deploy_commanded_joint_traces = []
+        deploy_actual_joint_traces = []
+        deploy_joint_trace_times = []
+        deploy_actual_paths_xyz = []
+
+        target_meta = artifact.get('target_metadata', {})
+        target_shape_xyz = None
+        if mode == 'drawing':
+            target_shape_list = target_meta.get('shape_xyz_waypoints', [])
+            if target_shape_list:
+                target_shape_xyz = np.asarray(target_shape_list, dtype=np.float64)
+
+        total_segments_sent = 0
+        total_segments_acked = 0
+        pi_joint_names = list(base_env.motion_backend.mapper.pi_joint_names)
+        pi_joint_meta = {}
+        for _, (gz_name, pi_name, home_deg, inverted) in enumerate(base_env.motion_backend.mapper.gazebo_lookup.items()):
+            pi_joint_meta[pi_name] = (home_deg, inverted)
+
+        for ep in range(episodes):
+            print(f"\n🎬 Starting Episode {ep+1}/{episodes}...")
+            # Move to start position first
+            start_joint = commanded_trajectory[0]
+            print(f"🏠 Homing robot and moving to start position (duration=2.0s)...")
+            base_env.motion_backend.home(duration=2.0)
+            time.sleep(1.0)
+            base_env.motion_backend.move_to_joint_positions(start_joint, duration=2.0)
+            time.sleep(2.0)
+            for _ in range(15):
+                rclpy.spin_once(base_env, timeout_sec=0.1)
+
+            # Get initial actual position
+            q_start_actual = np.array(base_env.joint_positions)
+            print(f"Start actual joints (deg): {np.degrees(q_start_actual)}")
+
+            # Log commands and actuals for this episode
+            commanded_deg_log = []
+            actual_deg_log = []
+            commanded_joint_rad_log = []
+            actual_joint_rad_log = []
+            curr_time = 0.0
+            episode_time_log = []
+
+            ep_start_time = time.time()
+
+            print(f"▶️ Replaying {len(new_replay_plan['segments'])} segments for Episode {ep+1}...")
+            for idx, seg in enumerate(new_replay_plan['segments']):
+                # Prepare degrees dict
+                positions_deg = {
+                    name: float(pos)
+                    for name, pos in zip(seg['joint_names_pi'], seg['positions_deg'])
+                }
+                # Log commanded degrees
+                cmd_deg_arr = [positions_deg[name] for name in pi_joint_names]
+                commanded_deg_log.append(cmd_deg_arr)
+                commanded_joint_rad_log.append(np.array([
+                    base_env.motion_backend.mapper.pi_deg_to_gazebo_rad(
+                        positions_deg[name],
+                        pi_joint_meta[name][0],
+                        pi_joint_meta[name][1],
+                    )
+                    for name in pi_joint_names
+                ], dtype=np.float64))
+
+                # Build and publish message
+                traj_msg = base_env.motion_backend.mapper.build_pi_trajectory_msg(positions_deg, float(seg['duration_sec']))
+                traj_msg.header.stamp = base_env.get_clock().now().to_msg()
+                base_env.motion_backend.real_joint_trajectory_pub.publish(traj_msg)
+                total_segments_sent += 1
+
+                # Reset tracking variable
+                base_env.data_ready = False
+
+                # Sleep for segment duration
+                time.sleep(float(seg['duration_sec']) + 0.02)
+                for _ in range(10):
+                    rclpy.spin_once(base_env, timeout_sec=0.01)
+
+                # Read actual joint state of physical arm and map to degrees
+                actual_joint_rad_gazebo = np.array(base_env.joint_positions, dtype=np.float64)
+                actual_deg_dict = base_env.motion_backend.mapper.gazebo_positions_to_pi_deg(np.array(base_env.joint_positions))
+                actual_deg_arr = [actual_deg_dict[name] for name in pi_joint_names]
+                actual_deg_log.append(actual_deg_arr)
+                actual_joint_rad_log.append(actual_joint_rad_gazebo.copy())
+                
+                if base_env.data_ready:
+                    total_segments_acked += 1
+                    packet_status = "OK"
+                else:
+                    packet_status = "LOST"
+
+                curr_time += float(seg['duration_sec'])
+                episode_time_log.append(curr_time)
+
+                cmd_str = ", ".join(f"{k}={positions_deg[k]:.1f}°" for k in base_env.motion_backend.mapper.pi_joint_names)
+                actual_str = ", ".join(f"{k}={actual_deg_dict[k]:.1f}°" for k in base_env.motion_backend.mapper.pi_joint_names)
+                
+                log_line = (
+                    f"[Ep {ep+1}/{episodes} | SEG {idx+1}/{len(new_replay_plan['segments'])}] "
+                    f"Cmd: [{cmd_str}] | "
+                    f"Actual: [{actual_str}] | "
+                    f"Status: {packet_status} | "
+                    f"dur={seg['duration_sec']:.2f}s\n"
+                )
+                print(log_line.strip())
+                with open(log_path, 'a') as f:
+                    f.write(log_line)
+
+            # Convert to numpy arrays
+            commanded_deg_log = np.array(commanded_deg_log)
+            actual_deg_log = np.array(actual_deg_log)
+            error_log = commanded_deg_log - actual_deg_log
+            
+            # Save for final plot
+            if not time_log:
+                time_log = episode_time_log
+                commanded_deg_log_all = commanded_deg_log
+            actual_deg_log_all.append(actual_deg_log)
+            deploy_commanded_joint_traces.append([q.tolist() for q in commanded_joint_rad_log])
+            deploy_actual_joint_traces.append([
+                np.array([
+                    base_env.motion_backend.mapper.pi_deg_to_gazebo_rad(
+                        actual_deg_row[name],
+                        pi_joint_meta[name][0],
+                        pi_joint_meta[name][1],
+                    )
+                    for name in pi_joint_names
+                ], dtype=np.float64).tolist()
+                for actual_deg_row in [
+                    {name: row[idx] for idx, name in enumerate(pi_joint_names)}
+                    for row in actual_deg_log
+                ]
+            ])
+            deploy_joint_trace_times.append(list(episode_time_log))
+
+            # Compute metrics for this episode
+            from rl.fk_ik_utils import fk
+            q_final_actual = np.array(base_env.joint_positions)
+            pi_xyz_final = np.array(fk(q_final_actual.tolist(), raw=True))
+
+            if mode == 'drawing':
+                target_xyz = np.array(target_meta.get('shape_xyz_waypoints', []))
+                target_xyz_final = np.array(target_xyz[-1]) if len(target_xyz) > 0 else np.zeros(3)
+            else:
+                target_xyz_final = np.array(target_meta.get('target_xyz', np.zeros(3)))
+
+            pi_cartesian_miss_mm = float(np.linalg.norm(pi_xyz_final - target_xyz_final) * 1000.0)
+            joint_diff = float(np.mean(np.abs(error_log)))
+            ep_duration = time.time() - ep_start_time
+
+            episode_cartesian_mm.append(pi_cartesian_miss_mm)
+            episode_joint_errors.append(joint_diff)
+            episode_durations.append(ep_duration)
+
+            if mode == 'drawing' and actual_joint_rad_log and target_shape_xyz is not None:
+                actual_path_xyz = np.array(
+                    [fk(np.asarray(q, dtype=np.float64).tolist(), raw=True) for q in actual_joint_rad_log],
+                    dtype=np.float64,
+                )
+                deploy_actual_paths_xyz.append(actual_path_xyz)
+                avg_wp_mm, max_wp_mm, waypoint_errors_mm = _compute_resampled_waypoint_errors(
+                    actual_path_xyz,
+                    target_shape_xyz,
+                )
+                episode_avg_wp_mm.append(avg_wp_mm)
+                episode_max_wp_mm.append(max_wp_mm)
+                episode_waypoint_errors.append(waypoint_errors_mm)
+            else:
+                episode_avg_wp_mm.append(None)
+                episode_max_wp_mm.append(None)
+                episode_waypoint_errors.append(None)
+
+            # Print option 7 style progress line
+            if mode == 'drawing' and episode_avg_wp_mm[-1] is not None:
+                print(f"\nEp {ep+1:4d}/{episodes} | "
+                      f"Duration: {ep_duration:.1f}s | "
+                      f"EndMiss: {pi_cartesian_miss_mm:5.1f}mm | "
+                      f"AvgWp: {episode_avg_wp_mm[-1]:5.1f}mm "
+                      f"MaxWp: {episode_max_wp_mm[-1]:5.1f}mm | "
+                      f"MeanJointErr: {joint_diff:.2f}° | "
+                      f"Hz: {replay_rate:.1f}")
+            else:
+                print(f"\nEp {ep+1:4d}/{episodes} | "
+                      f"Duration: {ep_duration:.1f}s | "
+                      f"CartesianMiss: {pi_cartesian_miss_mm:5.1f}mm | "
+                      f"MeanJointErr: {joint_diff:.2f}° | "
+                      f"Hz: {replay_rate:.1f}")
+                  
+            # Log episode summary
+            if mode == 'drawing' and episode_avg_wp_mm[-1] is not None:
+                ep_summary = (
+                    f"\n--- Episode {ep+1} Summary ---\n"
+                    f"Duration: {ep_duration:.2f}s | End Miss: {pi_cartesian_miss_mm:.2f} mm | "
+                    f"Avg WP Miss: {episode_avg_wp_mm[-1]:.2f} mm | "
+                    f"Max WP Miss: {episode_max_wp_mm[-1]:.2f} mm | "
+                    f"Mean Joint Error: {joint_diff:.2f}°\n"
+                    f"--------------------------------------------------------------------------------\n"
+                )
+            else:
+                ep_summary = (
+                    f"\n--- Episode {ep+1} Summary ---\n"
+                    f"Duration: {ep_duration:.2f}s | Cartesian Miss: {pi_cartesian_miss_mm:.2f} mm | "
+                    f"Mean Joint Error: {joint_diff:.2f}°\n"
+                    f"--------------------------------------------------------------------------------\n"
+                )
+            with open(log_path, 'a') as f:
+                f.write(ep_summary)
+
+        # Final Session Stats
+        loss_pct = ((total_segments_sent - total_segments_acked) / total_segments_sent) * 100.0 if total_segments_sent > 0 else 0.0
+        mean_cartesian = np.mean(episode_cartesian_mm)
+        std_cartesian = np.std(episode_cartesian_mm)
+        mean_joint_err = np.mean(episode_joint_errors)
+        mean_duration = np.mean(episode_durations)
+        valid_avg_wp = [v for v in episode_avg_wp_mm if v is not None]
+        valid_max_wp = [v for v in episode_max_wp_mm if v is not None]
+
+        final_summary_lines = [
+            "",
+            "==================================================",
+            "📊 DEPLOY SESSION COMPLETE SUMMARY",
+            "==================================================",
+            f"Total Episodes Run      : {episodes}",
+            f"Avg Cartesian Error     : {mean_cartesian:.2f} ± {std_cartesian:.2f} mm",
+            f"Avg Joint Position Error: {mean_joint_err:.2f}°",
+            f"Avg Episode Duration    : {mean_duration:.2f} s",
+        ]
+        if mode == 'drawing' and valid_avg_wp:
+            final_summary_lines.append(
+                f"Avg Waypoint Miss       : {np.mean(valid_avg_wp):.2f} ± {np.std(valid_avg_wp):.2f} mm"
+            )
+            final_summary_lines.append(
+                f"Avg Max Waypoint Miss   : {np.mean(valid_max_wp):.2f} mm"
+            )
+        final_summary_lines += [
+            f"Telemetry Miss Rate     : {loss_pct:.1f}% ({total_segments_sent - total_segments_acked}/{total_segments_sent} segments)",
+            f"Log saved to            : {log_path}",
+            "==================================================",
+            "",
+        ]
+        final_summary = "\n".join(final_summary_lines)
+        print(final_summary)
+        with open(log_path, 'a') as f:
+            f.write(final_summary)
+
+        # Save PKL results
+        results_dir = os.path.join(os.path.dirname(__file__), 'training_results', 'pkl')
+        png_dir = os.path.join(os.path.dirname(__file__), 'training_results', 'png')
+        os.makedirs(results_dir, exist_ok=True)
+        os.makedirs(png_dir, exist_ok=True)
+        deploy_results_path = os.path.join(results_dir, f'deploy_results_{mode}_{timestamp}.pkl')
+        
+        deploy_results = {
+            'source_artifact': replay_artifact_path,
+            'source_mode': mode,
+            'pi_replay_rate_hz': replay_rate,
+            'total_episodes': episodes,
+            'avg_cartesian_error_mm': mean_cartesian,
+            'std_cartesian_error_mm': std_cartesian,
+            'avg_joint_error_deg': mean_joint_err,
+            'packet_loss_pct': loss_pct,
+            'deploy_timestamp': timestamp,
+            'episode_cartesian_errors': episode_cartesian_mm,
+            'episode_avg_wp_mm': episode_avg_wp_mm,
+            'episode_max_wp_mm': episode_max_wp_mm,
+            'episode_joint_errors': episode_joint_errors,
+            'commanded_deg': commanded_deg_log_all.tolist(),
+            'actual_deg_all_episodes': [act.tolist() for act in actual_deg_log_all],
+            'time_log': time_log,
+            'deploy_commanded_joint_traces': deploy_commanded_joint_traces,
+            'deploy_actual_joint_traces': deploy_actual_joint_traces,
+            'deploy_joint_trace_times': deploy_joint_trace_times,
+            'deploy_actual_paths_xyz': [path.tolist() for path in deploy_actual_paths_xyz],
+            'target_shape_xyz': target_shape_xyz.tolist() if target_shape_xyz is not None else None,
+            'episode_waypoint_errors': episode_waypoint_errors,
+        }
+        with open(deploy_results_path, 'wb') as f:
+            pickle.dump(deploy_results, f)
+        print(f"💾 Deploy results saved to: {deploy_results_path}")
+
+        if mode == 'drawing' and deploy_actual_paths_xyz and target_shape_xyz is not None:
+            valid_wp_indices = [idx for idx, value in enumerate(episode_avg_wp_mm) if value is not None]
+            if valid_wp_indices:
+                representative_idx = min(valid_wp_indices, key=lambda idx: episode_avg_wp_mm[idx])
+            else:
+                representative_idx = 0
+            _plot_drawing_trajectory(
+                all_paths=deploy_actual_paths_xyz,
+                best_path=deploy_actual_paths_xyz[representative_idx],
+                target_shape=target_shape_xyz,
+                png_dir=png_dir,
+                timestamp=timestamp,
+                plot_stem='deploy_trajectory',
+                title_prefix='Deploy Replay (Drawing): Trajectory Quality',
+            )
+            _plot_pid_joint_tracking(
+                commanded_traces=[deploy_commanded_joint_traces[idx] for idx in range(len(deploy_actual_joint_traces))],
+                actual_traces=deploy_actual_joint_traces,
+                time_traces=deploy_joint_trace_times,
+                joint_names=pi_joint_names,
+                png_dir=png_dir,
+                timestamp=timestamp,
+                representative_idx=representative_idx,
+                avg_wp_mm=episode_avg_wp_mm,
+                max_wp_mm=episode_max_wp_mm,
+                plot_stem='deploy_joint_tracking',
+                title_prefix='Deploy Joint Tracking',
+            )
+            _plot_deploy_drawing_summary(
+                endpoint_mm=episode_cartesian_mm,
+                avg_wp_mm=episode_avg_wp_mm,
+                max_wp_mm=episode_max_wp_mm,
+                joint_errors=episode_joint_errors,
+                durations=episode_durations,
+                waypoint_errors=episode_waypoint_errors,
+                png_dir=png_dir,
+                timestamp=timestamp,
+                replay_rate_hz=replay_rate,
+            )
+
+        # Save Combined Plot
+        plot_path = os.path.join(png_dir, f'deploy_comparison_{mode}_{timestamp}.png')
+
+        fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+        fig.suptitle(f"Deploy Multi-Episode: {mode.capitalize()} (Pi vs. Sim at {replay_rate}Hz)\n"
+                     f"Avg Cartesian Miss: {mean_cartesian:.1f} ± {std_cartesian:.1f}mm | Joint Err: {mean_joint_err:.2f}° avg\n"
+                     f"Telemetry Miss: {loss_pct:.1f}% | Total Runs: {episodes}", 
+                     fontsize=14, fontweight='bold')
+
+        joint_names = base_env.motion_backend.mapper.pi_joint_names
+        for idx, (ax, joint_name) in enumerate(zip(axes.ravel(), joint_names)):
+            ax.plot(time_log, commanded_deg_log_all[:, idx], 'r--', linewidth=2, label='Commanded (Sim)')
+            for ep_idx, actual_deg_log in enumerate(actual_deg_log_all):
+                ax.plot(time_log, actual_deg_log[:, idx], alpha=0.5, label=f'Actual Ep {ep_idx+1}')
+            ax.set_title(f"Joint: {joint_name}")
+            ax.set_xlabel("Time (sec)")
+            ax.set_ylabel("Angle (deg)")
+            ax.grid(True, alpha=0.3)
+            ax.legend(fontsize=8)
+
+        plt.tight_layout()
+        plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"🖼️ Comparison plot saved: {plot_path}")
+        return True
+
+    finally:
+        if base_env is not None:
+            try:
+                print("\n🏠 Returning robot to home position before exit...")
+                base_env.home(duration=2.0)
+            except Exception as e:
+                print(f"   ⚠️ Could not return home: {e}")
+            try:
+                base_env.destroy_node()
+            except Exception:
+                pass
+        if ros_initialized:
+            try:
+                rclpy.shutdown()
+            except Exception:
+                pass
+
+
+def train_pid_tuning(
+    mode='reaching',
+    control_backend=None,
+    require_board_detection=False,
+    replay_artifact_path=None,
+    replay_gains_path=None,
+):
     """
     Train RL agent to optimize PID gains for trajectory tracking.
     
@@ -1902,9 +2546,19 @@ def train_pid_tuning(mode='reaching'):
     Args:
         mode: 'reaching' or 'drawing' (both use joint-space for now)
     """
+    control_backend = resolve_control_backend(control_backend)
+
+    if control_backend == 'real_replay':
+        return _run_pid_real_replay(
+            mode=mode,
+            replay_artifact_path=replay_artifact_path,
+            replay_gains_path=replay_gains_path,
+        )
+
     print("\n" + "="*70)
     print(f"🎛️  PID TUNING — RL-Optimized PID Gains ({mode.upper()})")
     print("="*70)
+    print(f"Backend: {control_backend}")
     print("Architecture: SAC → PID gains (18D) → position commands → Gazebo")
     print("Episode: observe state → set gains → track trajectory → reward")
     print("Targets: random joint-space → FK for sphere visualization")
@@ -1923,15 +2577,31 @@ def train_pid_tuning(mode='reaching'):
         ros_initialized = True
         
         # Create base RL environment (handles ROS2 communication)
-        print("\n📦 Creating base RL environment...")
-        base_env = RLEnvironment(
-            max_episode_steps=200,
-            goal_tolerance=0.01
-        )
+        print(f"\n📦 Creating base RL environment for {mode}...")
+        if mode == 'drawing':
+            from rl.drawing_environment import DrawingEnvironment
+            from drawing.drawing_config import SHAPE_TYPE, SHAPE_SIZE, WAYPOINT_TOLERANCE
+            base_env = DrawingEnvironment(
+                max_episode_steps=200,
+                waypoint_tolerance=WAYPOINT_TOLERANCE,
+                shape_type=SHAPE_TYPE,
+                shape_size=SHAPE_SIZE,
+                use_dynamic_workspace=require_board_detection,
+                control_backend=control_backend,
+                mirror_safe_moves=(control_backend != 'sim_to_real_shadow'),
+            )
+        else:
+            base_env = RLEnvironment(
+                max_episode_steps=200,
+                goal_tolerance=0.01,
+                control_backend=control_backend,
+                mirror_safe_moves=(control_backend != 'sim_to_real_shadow'),
+            )
         
-        # Enable board tracking (ArUco detection for visualization + real-world)
-        print("📡 Enabling board tracking...")
-        base_env.enable_board_tracking()
+        # Enable board tracking (DrawingEnvironment does this internally)
+        if mode != 'drawing' and require_board_detection:
+            print("📡 Enabling board tracking...")
+            base_env.enable_board_tracking()
         
         # Wait for environment to initialize
         print("   Waiting for environment...")
@@ -1939,18 +2609,21 @@ def train_pid_tuning(mode='reaching'):
         for _ in range(10):
             rclpy.spin_once(base_env, timeout_sec=0.1)
         
-        # Wait for ArUco board detection (needed for gazebo_drawing_visualizer)
-        print("\n⏳ Waiting for ArUco board detection...")
-        if not base_env.wait_for_initial_detection(timeout=10.0):
-            print("⚠️  No board detected — sphere visualization may be offset")
-            print("   (Training still works, targets are in joint space)")
+        # Wait for ArUco board detection only when explicitly required
+        if require_board_detection:
+            print("\n⏳ Waiting for ArUco board detection...")
+            if not base_env.wait_for_initial_detection(10.0):
+                print("⚠️  No board detected — sphere visualization may be offset")
+                print("   (Training still works, targets are in joint space)")
+            else:
+                print("✅ Board detected — visualization active")
         else:
-            print("✅ Board detected — visualization active")
+            print("\n📡 Board detection: optional (skipped)")
         
         # Create PID tuning environment (wraps base_env)
-        # Targets = random joints, FK for sphere visualization via /rl/current_target
+        # Targets = random joints or drawing shape
         print("\n🎛️  Creating PID Tuning environment...")
-        env = PIDTuningEnv(base_env)
+        env = PIDTuningEnv(base_env, mode=mode)
         
         # Get training parameters
         print("\n📊 PID Tuning Configuration")
@@ -1963,6 +2636,8 @@ def train_pid_tuning(mode='reaching'):
         print(f"   Episodes: {episodes}")
         print(f"   State dim: {env.state_dim} (24D)")
         print(f"   Action dim: {env.action_dim} (18D)")
+        print(f"   Control backend: {control_backend}")
+        print(f"   Require board detection: {require_board_detection}")
         print("="*70)
         
         # Create SAC agent for PID tuning (different dimensions from reaching/drawing)
@@ -1982,32 +2657,37 @@ def train_pid_tuning(mode='reaching'):
         )
         
         # Override checkpoint directory for PID tuning mode
+        mode_suffix = f'sac_pid_tuning_{mode}_{control_backend}'
         agent.checkpoint_dir = os.path.join(
-            os.path.dirname(__file__), 'checkpoints', 'sac_pid_tuning'
+            os.path.dirname(__file__), 'checkpoints', mode_suffix
         )
         os.makedirs(agent.checkpoint_dir, exist_ok=True)
         print(f"   Checkpoint dir: {agent.checkpoint_dir}")
         
-        # Try to load existing models
+        # Explicitly choose warm-start vs fresh start.
+        # For changed-controller experiments, loading an older actor can poison the comparison.
         best_actor = os.path.join(agent.checkpoint_dir, 'actor_sac_best.pth')
         if os.path.exists(best_actor):
-            try:
-                agent.load_models(best_actor)
-                print(f"   ✅ Loaded pre-trained PID tuning model")
-            except Exception as e:
-                print(f"   ⚠️  Failed to load model: {e}")
-                print("   Starting with untrained agent")
+            load_model = input("\n🧠 Load pre-trained PID tuning model? (y/n, default=n): ").strip().lower()
+            if load_model == 'y':
+                try:
+                    agent.load_models(best_actor)
+                    print(f"   ✅ Loaded pre-trained PID tuning model")
+                except Exception as e:
+                    print(f"   ⚠️  Failed to load model: {e}")
+                    print("   Starting with untrained agent")
+            else:
+                print("   📝 Starting fresh (pre-trained PID model not loaded)")
         else:
             print("   📝 No pre-trained model found, starting fresh")
         
         # Try to load replay buffer
-        mode_suffix = 'sac_pid_tuning'
         load_buffer = input("\n📦 Load existing replay buffer? (y/n): ").strip().lower()
         if load_buffer == 'y':
             import glob
             pkl_dir = os.path.join(os.path.dirname(__file__), 'training_results', 'pkl')
             buffer_files = sorted(
-                glob.glob(os.path.join(pkl_dir, f"*{mode_suffix}*.pkl")),
+                glob.glob(os.path.join(pkl_dir, f"*replay_buffer*{mode_suffix}*.pkl")),
                 key=os.path.getmtime, reverse=True
             )
             if buffer_files:
@@ -2027,9 +2707,28 @@ def train_pid_tuning(mode='reaching'):
         # Training statistics
         episode_rewards = []
         episode_iaes = []
+        episode_norm_iaes = []
+        episode_efforts = []
+        episode_smooth_delta = []
+        episode_smooth_jerk = []
         episode_final_errors = []
         actor_losses = []
         critic_losses = []
+        episode_cartesian_mm = []
+        episode_max_wp_mm = []
+        episode_waypoint_errors = []
+        episode_all_paths = []
+        episode_target_shapes = []
+        episode_commanded_joint_traces = []
+        episode_actual_joint_traces = []
+        episode_joint_trace_times = []
+        guard_events = []
+        best_artifact = None
+        best_artifact_path = None
+        best_gains_path = None
+        best_actual_path = None
+        best_target_shape = None
+        best_plot_episode_idx = None
         
         best_reward = -float('inf')
         
@@ -2048,6 +2747,19 @@ def train_pid_tuning(mode='reaching'):
         LEARNING_STARTS = 10
         OPT_STEPS = 32
         SAVE_INTERVAL = 25
+        GUARD_HEALTH_AVG_WP_MM = 5.0
+        GUARD_HEALTH_MAX_WP_MM = 10.0
+        GUARD_HEALTH_NORM_IAE = 12.0
+        GUARD_HEALTH_FINAL_ERR_DEG = 1.0
+        GUARD_MIN_HEALTHY_STREAK = 3
+        GUARD_COOLDOWN_EPISODES = 5
+        guard_snapshot = _capture_sac_snapshot(agent)
+        guard_snapshot_episode = 0
+        healthy_streak = 0
+        catastrophic_streak = 0
+        cooldown_remaining = 0
+        healthy_metrics_window = []
+        HEALTHY_WINDOW_MAX = 20
         
         for episode in range(episodes):
             episode_start = time.time()
@@ -2056,26 +2768,122 @@ def train_pid_tuning(mode='reaching'):
             state = env.reset()
             
             # RL agent selects PID gains
-            action = agent.select_action(state, evaluate=False)
+            action = agent.select_action(state, evaluate=(cooldown_remaining > 0))
             
             # Execute trajectory with selected PID gains
             next_state, reward, done, info = env.step(action)
-            
-            # Store transition (single-step MDP)
-            agent.store_transition(state, action, reward, next_state, float(done))
-            
+
+            avg_wp = float(info.get('avg_wp_error_mm', info.get('cartesian_dist_mm', 0.0)))
+            max_wp = float(info.get('max_wp_error_mm', info.get('cartesian_dist_mm', 0.0)))
+            norm_iae = float(info.get('normalized_iae', 0.0))
+            final_err_deg = float(np.degrees(info['final_error']))
+
+            if healthy_metrics_window:
+                avg_roll = float(np.median([m['avg_wp'] for m in healthy_metrics_window]))
+                max_roll = float(np.median([m['max_wp'] for m in healthy_metrics_window]))
+                norm_roll = float(np.median([m['norm_iae'] for m in healthy_metrics_window]))
+                final_roll = float(np.median([m['final_deg'] for m in healthy_metrics_window]))
+            else:
+                avg_roll = max_roll = norm_roll = final_roll = 0.0
+
+            severe_divergence = (
+                avg_wp > max(20.0, 6.0 * max(avg_roll, 1.0)) or
+                max_wp > max(60.0, 8.0 * max(max_roll, 1.0)) or
+                norm_iae > max(40.0, 6.0 * max(norm_roll, 1.0)) or
+                final_err_deg > max(8.0, 6.0 * max(final_roll, 0.25))
+            )
+            catastrophic = (
+                avg_wp > max(10.0, 3.0 * max(avg_roll, 1.0)) or
+                max_wp > max(25.0, 4.0 * max(max_roll, 1.0)) or
+                norm_iae > max(20.0, 3.0 * max(norm_roll, 1.0)) or
+                final_err_deg > max(3.0, 4.0 * max(final_roll, 0.25))
+            )
+            healthy = (
+                avg_wp <= GUARD_HEALTH_AVG_WP_MM and
+                max_wp <= GUARD_HEALTH_MAX_WP_MM and
+                norm_iae <= GUARD_HEALTH_NORM_IAE and
+                final_err_deg <= GUARD_HEALTH_FINAL_ERR_DEG
+            )
+
+            should_store = True
+            trigger_recovery = False
+
+            if episode >= LEARNING_STARTS and catastrophic:
+                should_store = False
+                catastrophic_streak += 1
+                healthy_streak = 0
+
+                if severe_divergence or catastrophic_streak >= 2:
+                    trigger_recovery = True
+            else:
+                catastrophic_streak = 0
+                if healthy:
+                    healthy_streak += 1
+                    healthy_metrics_window.append({
+                        'avg_wp': avg_wp,
+                        'max_wp': max_wp,
+                        'norm_iae': norm_iae,
+                        'final_deg': final_err_deg,
+                    })
+                    if len(healthy_metrics_window) > HEALTHY_WINDOW_MAX:
+                        healthy_metrics_window.pop(0)
+
+                    if episode >= LEARNING_STARTS and healthy_streak >= GUARD_MIN_HEALTHY_STREAK:
+                        guard_snapshot = _capture_sac_snapshot(agent)
+                        guard_snapshot_episode = episode + 1
+                else:
+                    healthy_streak = 0
+
+            if trigger_recovery and guard_snapshot is not None:
+                _restore_sac_snapshot(agent, guard_snapshot)
+                cooldown_remaining = GUARD_COOLDOWN_EPISODES
+                catastrophic_streak = 0
+                guard_events.append({
+                    'episode': episode + 1,
+                    'reward': reward,
+                    'avg_wp_mm': avg_wp,
+                    'max_wp_mm': max_wp,
+                    'norm_iae': norm_iae,
+                    'final_error_deg': final_err_deg,
+                    'rollback_to_episode': guard_snapshot_episode,
+                })
+                print(
+                    f"   🛟 Divergence guard: rollback to healthy snapshot from ep {guard_snapshot_episode} "
+                    f"(ep {episode+1} skipped, cooldown {cooldown_remaining} eps)"
+                )
+
+            # Store transition (single-step MDP) unless guard quarantines it
+            if should_store:
+                agent.store_transition(state, action, reward, next_state, float(done))
+
             # Training updates
             a_loss, c_loss = None, None
-            if episode >= LEARNING_STARTS:
+            if episode >= LEARNING_STARTS and cooldown_remaining == 0:
                 for _ in range(OPT_STEPS):
                     a_loss, c_loss = agent.train()
+            elif cooldown_remaining > 0:
+                cooldown_remaining -= 1
             
             # Log statistics
             episode_rewards.append(reward)
             episode_iaes.append(info['iae'])
+            episode_norm_iaes.append(norm_iae)
+            episode_efforts.append(info.get('effort', 0.0))
+            episode_smooth_delta.append(info.get('normalized_command_delta', 0.0))
+            episode_smooth_jerk.append(info.get('normalized_command_jerk', 0.0))
             episode_final_errors.append(info['final_error'])
             actor_losses.append(a_loss)
             critic_losses.append(c_loss)
+            episode_cartesian_mm.append(info.get('cartesian_dist_mm', 0.0))
+            episode_max_wp_mm.append(info.get('max_wp_error_mm', info.get('cartesian_dist_mm', 0.0)))
+            episode_waypoint_errors.append(info.get('waypoint_errors_mm', None))
+            episode_commanded_joint_traces.append(info.get('commanded_trajectory_rad', []))
+            episode_actual_joint_traces.append(info.get('actual_joint_trace_rad', []))
+            episode_joint_trace_times.append(info.get('joint_trace_time_sec', []))
+            
+            if mode == 'drawing':
+                episode_all_paths.append(info.get('actual_path_xyz', []))
+                episode_target_shapes.append(info.get('target_shape_xyz', None))
             
             episode_time = time.time() - episode_start
             
@@ -2088,30 +2896,65 @@ def train_pid_tuning(mode='reaching'):
             ki_mean = np.mean(gains['Ki'])
             kd_mean = np.mean(gains['Kd'])
             
-            print(f"Ep {episode+1:4d}/{episodes} | "
-                  f"R: {reward:8.2f} | "
-                  f"IAE: {info['iae']:6.3f} | "
-                  f"CartesianMiss: {info['cartesian_dist_mm']:5.1f}mm | "
-                  f"Kp̄={kp_mean:.2f} Ki̊={ki_mean:.3f} Kd̄={kd_mean:.3f} | "
-                  f"{episode_time:.1f}s")
+            if mode == 'drawing':
+                print(f"Ep {episode+1:4d}/{episodes} | "
+                      f"R: {reward:8.2f} | "
+                      f"IAE: {info['iae']:6.1f} | "
+                      f"AvgWp: {avg_wp:5.1f}mm MaxWp: {max_wp:5.1f}mm | "
+                      f"Kp̄={kp_mean:.2f} Ki̊={ki_mean:.3f} Kd̄={kd_mean:.3f} | "
+                      f"{episode_time:.1f}s")
+            else:
+                print(f"Ep {episode+1:4d}/{episodes} | "
+                      f"R: {reward:8.2f} | "
+                      f"IAE: {info['iae']:6.3f} | "
+                      f"CartesianMiss: {info['cartesian_dist_mm']:5.1f}mm | "
+                      f"Kp̄={kp_mean:.2f} Ki̊={ki_mean:.3f} Kd̄={kd_mean:.3f} | "
+                      f"{episode_time:.1f}s")
             
             # Save best model
             if reward > best_reward and episode >= LEARNING_STARTS:
                 best_reward = reward
                 agent.save_models()
-                print(f"   💾 New best! Reward={reward:.2f}")
+                print(f"   \U0001f4be New best! Reward={reward:.2f}")
+                
+                if mode == 'drawing':
+                    best_actual_path = info.get('actual_path_xyz', None)
+                    best_target_shape = info.get('target_shape_xyz', None)
+                best_plot_episode_idx = episode
                 
                 # Save best gains
                 best_gains = env.get_best_gains()
                 if best_gains:
                     import json
-                    gains_path = os.path.join(agent.checkpoint_dir, 'best_gains.json')
+                    gains_path = os.path.join(agent.checkpoint_dir, f'best_gains_{mode_suffix}.json')
                     gains_save = {
                         k: v.tolist() if hasattr(v, 'tolist') else v
                         for k, v in best_gains.items()
                     }
                     with open(gains_path, 'w') as f:
                         json.dump(gains_save, f, indent=2)
+                    best_gains_path = gains_path
+
+                best_artifact = env.get_last_episode_artifact()
+                if best_artifact is not None:
+                    import pickle
+                    best_artifact_path = os.path.join(
+                        pkl_dir, f'pid_best_artifact_{mode_suffix}_{timestamp}.pkl'
+                    )
+                    with open(best_artifact_path, 'wb') as f:
+                        pickle.dump(best_artifact, f)
+                    print(f"   💾 Replay artifact saved: {best_artifact_path}")
+
+                    replay_error = best_artifact.get('replay_export_error')
+                    if replay_error:
+                        print(f"   ⚠️ Replay export unavailable: {replay_error}")
+                    elif control_backend == 'sim_to_real_shadow':
+                        replay_ok = env.replay_artifact(
+                            best_artifact,
+                            label=f'{mode_suffix}_ep{episode+1}',
+                        )
+                        if not replay_ok:
+                            print("   ⚠️ Shadow replay failed on hardware backend")
             
             # Periodic saves
             if (episode + 1) % SAVE_INTERVAL == 0:
@@ -2152,8 +2995,77 @@ def train_pid_tuning(mode='reaching'):
         _plot_pid_tuning_results(
             episode_rewards, episode_iaes, episode_final_errors,
             actor_losses, critic_losses, env.get_gain_history(),
-            png_dir, csv_dir, timestamp
+            png_dir, csv_dir, timestamp,
+            cartesian_mm=episode_cartesian_mm,
+            max_wp_mm=episode_max_wp_mm,
+            waypoint_errors=episode_waypoint_errors,
+            efforts=episode_efforts,
+            normalized_iaes=episode_norm_iaes,
+            smooth_deltas=episode_smooth_delta,
+            smooth_jerks=episode_smooth_jerk,
+            mode=mode
         )
+        if mode == 'drawing':
+            if best_plot_episode_idx is None and episode_cartesian_mm:
+                best_plot_episode_idx = int(np.argmin(episode_cartesian_mm))
+                best_actual_path = episode_all_paths[best_plot_episode_idx] if best_plot_episode_idx < len(episode_all_paths) else None
+                best_target_shape = episode_target_shapes[best_plot_episode_idx] if best_plot_episode_idx < len(episode_target_shapes) else None
+
+            # Save and report worst outliers (highest max waypoint miss)
+            try:
+                outlier_k = 5
+                idx_sorted = sorted(
+                    range(len(episode_max_wp_mm)),
+                    key=lambda i: float(episode_max_wp_mm[i]) if episode_max_wp_mm[i] is not None else -1.0,
+                    reverse=True
+                )
+                outliers = []
+                for rank, i in enumerate(idx_sorted[:outlier_k], start=1):
+                    outliers.append({
+                        'rank': rank,
+                        'episode': i + 1,
+                        'reward': float(episode_rewards[i]),
+                        'iae': float(episode_iaes[i]),
+                        'normalized_iae': float(episode_norm_iaes[i]) if i < len(episode_norm_iaes) else None,
+                        'effort': float(episode_efforts[i]) if i < len(episode_efforts) else None,
+                        'smooth_delta': float(episode_smooth_delta[i]) if i < len(episode_smooth_delta) else None,
+                        'smooth_jerk': float(episode_smooth_jerk[i]) if i < len(episode_smooth_jerk) else None,
+                        'avg_wp_error_mm': float(episode_cartesian_mm[i]) if i < len(episode_cartesian_mm) else None,
+                        'max_wp_error_mm': float(episode_max_wp_mm[i]) if i < len(episode_max_wp_mm) else None,
+                        'waypoint_errors_mm': episode_waypoint_errors[i] if i < len(episode_waypoint_errors) else None,
+                        'actual_path_xyz': episode_all_paths[i] if i < len(episode_all_paths) else None,
+                        'target_shape_xyz': episode_target_shapes[i] if i < len(episode_target_shapes) else None,
+                    })
+
+                import pickle
+                outliers_path = os.path.join(pkl_dir, f'pid_outliers_{mode_suffix}_{timestamp}.pkl')
+                with open(outliers_path, 'wb') as f:
+                    pickle.dump(outliers, f)
+
+                print("\n🔥 Worst Episodes By Max Waypoint Miss")
+                for o in outliers:
+                    print(
+                        f"  #{o['rank']} ep={o['episode']:4d} "
+                        f"maxWP={o['max_wp_error_mm']:.1f}mm avgWP={o['avg_wp_error_mm']:.1f}mm "
+                        f"R={o['reward']:.2f} normIAE={o['normalized_iae']:.3f}"
+                    )
+                print(f"💾 Outliers saved: {outliers_path}")
+            except Exception as e:
+                print(f"⚠️  Outlier report failed: {e}")
+
+            _plot_pid_joint_tracking(
+                commanded_traces=episode_commanded_joint_traces,
+                actual_traces=episode_actual_joint_traces,
+                time_traces=episode_joint_trace_times,
+                joint_names=env.base_env.motion_backend.mapper.pi_joint_names,
+                png_dir=png_dir,
+                timestamp=timestamp,
+                representative_idx=best_plot_episode_idx,
+                rewards=episode_rewards,
+                avg_wp_mm=episode_cartesian_mm,
+                max_wp_mm=episode_max_wp_mm,
+            )
+            _plot_drawing_trajectory(episode_all_paths, best_actual_path, best_target_shape, png_dir, timestamp)
         
         # Save training results for continuation
         import pickle
@@ -2164,6 +3076,15 @@ def train_pid_tuning(mode='reaching'):
             'actor_losses': actor_losses,
             'critic_losses': critic_losses,
             'gain_history': env.get_gain_history(),
+            'guard_events': guard_events,
+            'control_backend': control_backend,
+            'mode': mode,
+            'require_board_detection': require_board_detection,
+            'best_artifact_path': best_artifact_path,
+            'best_gains_path': best_gains_path,
+            'episode_commanded_joint_traces': episode_commanded_joint_traces,
+            'episode_actual_joint_traces': episode_actual_joint_traces,
+            'episode_joint_trace_times': episode_joint_trace_times,
         }
         results_path = os.path.join(pkl_dir, f'training_results_{mode_suffix}_{timestamp}.pkl')
         with open(results_path, 'wb') as f:
@@ -2173,6 +3094,7 @@ def train_pid_tuning(mode='reaching'):
         # Cleanup old files
         cleanup_old_files(pkl_dir, f"replay_buffer_ep*{mode_suffix}*.pkl", 4)
         cleanup_old_files(pkl_dir, f"replay_buffer_final*{mode_suffix}*.pkl", 1)
+        cleanup_old_files(pkl_dir, f"pid_best_artifact*{mode_suffix}*.pkl", 3)
         print(f"🧹 Cleaned up old buffer files")
         
         print("\n✅ PID tuning training complete!")
@@ -2187,8 +3109,7 @@ def train_pid_tuning(mode='reaching'):
         if env is not None:
             try:
                 print("\n🏠 Returning robot to home position before exit...")
-                env.base_env._move_to_joint_positions(env.home_position, duration=2.0)
-                import time
+                env.base_env.home(duration=2.0)
                 time.sleep(2.0)
             except Exception as e:
                 print(f"   ⚠️ Could not return home: {e}")
@@ -2206,17 +3127,42 @@ def train_pid_tuning(mode='reaching'):
 
 
 def _plot_pid_tuning_results(rewards, iaes, final_errors, actor_losses, critic_losses,
-                             gain_history, png_dir, csv_dir, timestamp):
+                             gain_history, png_dir, csv_dir, timestamp,
+                             cartesian_mm=None, max_wp_mm=None, waypoint_errors=None,
+                             efforts=None, normalized_iaes=None,
+                             smooth_deltas=None, smooth_jerks=None,
+                             mode='reaching'):
     """Plot PID tuning training statistics."""
     episodes = np.arange(1, len(rewards) + 1)
+    is_drawing = mode == 'drawing' and cartesian_mm is not None and len(cartesian_mm) > 0
     
     def cumulative_avg(data):
         return [np.mean(data[:i+1]) for i in range(len(data))]
     
-    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
-    fig.suptitle('PID Tuning Training — RL-Optimized Gains', fontsize=16, fontweight='bold')
+    def rolling_avg(data, window=20):
+        out = []
+        for i in range(len(data)):
+            start = max(0, i - window + 1)
+            out.append(np.mean(data[start:i+1]))
+        return out
+
+    def rolling_rate(flags, window=50):
+        out = []
+        for i in range(len(flags)):
+            start = max(0, i - window + 1)
+            out.append(np.mean(flags[start:i+1]))
+        return out
     
-    # Plot 1: Rewards
+    # Use 3x3 grid for drawing mode, 2x3 for reaching
+    if is_drawing:
+        fig, axes = plt.subplots(3, 3, figsize=(20, 15))
+    else:
+        fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    
+    mode_label = 'Drawing' if is_drawing else 'Reaching'
+    fig.suptitle(f'PID Tuning Training — RL-Optimized Gains ({mode_label})', fontsize=16, fontweight='bold')
+    
+    # ── Row 0, Col 0: Rewards ──
     ax = axes[0, 0]
     ax.plot(episodes, rewards, alpha=0.3, color='blue', linewidth=1.5)
     ax.plot(episodes, cumulative_avg(rewards), color='darkblue', linewidth=3.0, label='Avg Reward')
@@ -2226,17 +3172,21 @@ def _plot_pid_tuning_results(rewards, iaes, final_errors, actor_losses, critic_l
     ax.legend()
     ax.grid(True, alpha=0.3)
     
-    # Plot 2: IAE
+    # ── Row 0, Col 1: IAE ──
     ax = axes[0, 1]
     ax.plot(episodes, iaes, alpha=0.3, color='orange', linewidth=1.5)
     ax.plot(episodes, cumulative_avg(iaes), color='darkorange', linewidth=3.0, label='Avg IAE')
+    if normalized_iaes is not None and len(normalized_iaes) == len(iaes):
+        ax.plot(episodes, normalized_iaes, alpha=0.15, color='sienna', linewidth=1.0)
+        ax.plot(episodes, rolling_avg(normalized_iaes, window=50),
+                color='saddlebrown', linewidth=2.5, label='Norm IAE (roll 50)')
     ax.set_xlabel('Episode')
     ax.set_ylabel('IAE (rad·steps)')
     ax.set_title('Integral Absolute Error')
     ax.legend()
     ax.grid(True, alpha=0.3)
     
-    # Plot 3: Final Error
+    # ── Row 0, Col 2: Final Error ──
     ax = axes[0, 2]
     final_errors_deg = [np.degrees(e) for e in final_errors]
     ax.plot(episodes, final_errors_deg, alpha=0.3, color='red', linewidth=1.5)
@@ -2247,42 +3197,30 @@ def _plot_pid_tuning_results(rewards, iaes, final_errors, actor_losses, critic_l
     ax.legend()
     ax.grid(True, alpha=0.3)
     
-    # Plot 4: Training Losses (Dual Y-axis)
+    # ── Row 1, Col 0: Success Rates / Effort (high-signal) ──
     ax = axes[1, 0]
-    ax2 = ax.twinx()  # Create a secondary y-axis for the Actor loss
-    
-    valid_a = [(i+1, l) for i, l in enumerate(actor_losses) if l is not None]
-    valid_c = [(i+1, l) for i, l in enumerate(critic_losses) if l is not None]
-    
-    line_c, line_a = None, None
-    if valid_c:
-        line_c = ax.plot(*zip(*valid_c), color='orange', alpha=0.8, label='Critic')
-        ax.set_ylabel('Critic Loss (MSE)', color='orange')
-        ax.tick_params(axis='y', labelcolor='orange')
-        
-    if valid_a:
-        line_a = ax2.plot(*zip(*valid_a), color='blue', alpha=0.8, label='Actor')
-        ax2.set_ylabel('Actor Loss (Policy)', color='blue')
-        ax2.tick_params(axis='y', labelcolor='blue')
-        
-    # Combine legends from both axes
-    lines = []
-    labels = []
-    if line_a:
-        lines += line_a
-        labels.append('Actor')
-    if line_c:
-        lines += line_c
-        labels.append('Critic')
-        
-    if lines:
-        ax.legend(lines, labels, loc='best')
-        
+    if is_drawing and cartesian_mm is not None and max_wp_mm is not None:
+        ok_avg = [v <= 5.0 for v in cartesian_mm]
+        ok_max = [v <= 10.0 for v in max_wp_mm]
+        ax.plot(episodes, rolling_rate(ok_avg, window=50), color='green', linewidth=2.5, label='P(AvgWP<=5mm) roll50')
+        ax.plot(episodes, rolling_rate(ok_max, window=50), color='orange', linewidth=2.5, label='P(MaxWP<=10mm) roll50')
+        ax.set_ylabel('Rate')
+        ax.set_ylim(-0.02, 1.02)
+        ax.set_title('Quality Success Rates')
+        ax.legend(loc='lower right', fontsize=9)
+    elif efforts is not None and len(efforts) == len(rewards):
+        ax.plot(episodes, efforts, alpha=0.25, color='gray', linewidth=1.0)
+        ax.plot(episodes, rolling_avg(efforts, window=50), color='black', linewidth=2.5, label='Effort roll50')
+        ax.set_ylabel('Effort')
+        ax.set_title('Control Effort')
+        ax.legend()
+    else:
+        ax.text(0.05, 0.5, "No success-rate data", transform=ax.transAxes)
+        ax.set_title('Quality')
     ax.set_xlabel('Episode')
-    ax.set_title('Training Losses')
     ax.grid(True, alpha=0.3)
     
-    # Plot 5: PID Gain Evolution
+    # ── Row 1, Col 1: PID Gain Evolution ──
     ax = axes[1, 1]
     if gain_history:
         kp_means = [np.mean(g['Kp']) for g in gain_history]
@@ -2298,29 +3236,106 @@ def _plot_pid_tuning_results(rewards, iaes, final_errors, actor_losses, critic_l
     ax.legend()
     ax.grid(True, alpha=0.3)
     
-    # Plot 6: Summary
+    # ── Row 1, Col 2: Summary ──
     ax = axes[1, 2]
     ax.axis('off')
     best_r = max(rewards)
     best_iae = min(iaes)
-    summary = f"""
-📊 PID Tuning Summary
-━━━━━━━━━━━━━━━━━━━
-
-Episodes: {len(rewards)}
-
-Rewards:
-  • Average: {np.mean(rewards):.2f}
-  • Best: {best_r:.2f}
-
-Tracking Quality:
-  • Best IAE: {best_iae:.4f}
-  • Avg Final Error: {np.mean(final_errors_deg):.2f}°
-  • Best Final Error: {min(final_errors_deg):.2f}°
-    """
-    ax.text(0.1, 0.5, summary, transform=ax.transAxes, fontsize=12,
+    summary_lines = [
+        f"PID Tuning Summary ({mode_label})",
+        f"-------------------------",
+        f"",
+        f"Episodes: {len(rewards)}",
+        f"",
+        f"Rewards:",
+        f"  - Average: {np.mean(rewards):.2f}",
+        f"  - Best: {best_r:.2f}",
+        f"",
+        f"Tracking Quality:",
+        f"  - Best IAE: {best_iae:.4f}",
+        f"  - Avg Final Error: {np.mean(final_errors_deg):.2f} deg",
+        f"  - Best Final Error: {min(final_errors_deg):.2f} deg",
+    ]
+    if smooth_deltas is not None and len(smooth_deltas) == len(rewards):
+        summary_lines += [
+            f"",
+            f"Smoothness:",
+            f"  - Avg Cmd Delta: {np.mean(smooth_deltas):.2f}",
+        ]
+        if smooth_jerks is not None and len(smooth_jerks) == len(rewards):
+            summary_lines.append(f"  - Avg Cmd Jerk: {np.mean(smooth_jerks):.2f}")
+    if is_drawing:
+        summary_lines += [
+            f"",
+            f"Drawing Accuracy:",
+            f"  - Avg WP Miss: {np.mean(cartesian_mm):.1f}mm",
+            f"  - Best Avg WP: {min(cartesian_mm):.1f}mm",
+            f"  - Avg Max WP: {np.mean(max_wp_mm):.1f}mm",
+        ]
+    summary = "\n".join(summary_lines)
+    ax.text(0.1, 0.5, summary, transform=ax.transAxes, fontsize=11,
             verticalalignment='center', fontfamily='monospace',
             bbox=dict(boxstyle='round', facecolor='lightcyan', alpha=0.5))
+    
+    # ── Drawing-specific plots (Row 2) ──
+    if is_drawing:
+        # Row 2, Col 0: Avg Waypoint Miss (mm)
+        ax = axes[2, 0]
+        ax.plot(episodes, cartesian_mm, alpha=0.3, color='purple', linewidth=1.5)
+        ax.plot(episodes, rolling_avg(cartesian_mm), color='darkviolet', linewidth=3.0, label='Rolling Avg (20)')
+        ax.axhline(y=5.0, color='green', linestyle='--', alpha=0.5, label='5mm target')
+        ax.set_xlabel('Episode')
+        ax.set_ylabel('Avg Waypoint Miss (mm)')
+        ax.set_title('Per-Waypoint Cartesian Accuracy')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        
+        # Row 2, Col 1: Max Waypoint Miss (mm)
+        ax = axes[2, 1]
+        ax.plot(episodes, max_wp_mm, alpha=0.3, color='crimson', linewidth=1.5)
+        ax.plot(episodes, rolling_avg(max_wp_mm), color='darkred', linewidth=3.0, label='Rolling Avg (20)')
+        ax.axhline(y=10.0, color='orange', linestyle='--', alpha=0.5, label='10mm target')
+        ax.set_xlabel('Episode')
+        ax.set_ylabel('Max Waypoint Miss (mm)')
+        ax.set_title('Worst Waypoint Per Episode')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        
+        # Row 2, Col 2: Waypoint error profile (mean + p90) or fallback to spread
+        ax = axes[2, 2]
+        if waypoint_errors is not None and len(waypoint_errors) > 0:
+            import numpy as _np
+            max_len = max(len(w) for w in waypoint_errors if w is not None)
+            if max_len > 0:
+                mat = _np.full((len(waypoint_errors), max_len), _np.nan, dtype=_np.float64)
+                for i, w in enumerate(waypoint_errors):
+                    if w is None:
+                        continue
+                    w = _np.array(w, dtype=_np.float64)
+                    mat[i, : min(max_len, len(w))] = w[:max_len]
+                mean_wp = _np.nanmean(mat, axis=0)
+                p90_wp = _np.nanpercentile(mat, 90, axis=0)
+                x = _np.arange(1, len(mean_wp) + 1)
+                ax.plot(x, mean_wp, color='teal', linewidth=2.5, label='Mean WP error')
+                ax.plot(x, p90_wp, color='darkcyan', linewidth=2.5, label='P90 WP error')
+                ax.axhline(y=5.0, color='green', linestyle='--', alpha=0.4, label='5mm')
+                ax.axhline(y=10.0, color='orange', linestyle='--', alpha=0.4, label='10mm')
+                ax.set_xlabel('Waypoint Index')
+                ax.set_ylabel('Error (mm)')
+                ax.set_title('Waypoint Error Profile')
+                ax.legend(fontsize=9)
+                ax.grid(True, alpha=0.3)
+            else:
+                waypoint_errors = None
+        if waypoint_errors is None:
+            spread = [m - a for a, m in zip(cartesian_mm, max_wp_mm)]
+            ax.plot(episodes, spread, alpha=0.3, color='teal', linewidth=1.5)
+            ax.plot(episodes, rolling_avg(spread), color='darkcyan', linewidth=3.0, label='Rolling Avg (20)')
+            ax.set_xlabel('Episode')
+            ax.set_ylabel('Max - Avg WP Error (mm)')
+            ax.set_title('Waypoint Consistency (lower = more uniform)')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
     
     plt.tight_layout()
     plot_path = os.path.join(png_dir, f'pid_tuning_{timestamp}.png')
@@ -2333,22 +3348,412 @@ Tracking Quality:
     csv_path = os.path.join(csv_dir, f'pid_tuning_{timestamp}.csv')
     with open(csv_path, 'w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(['Episode', 'Reward', 'IAE', 'FinalError_deg',
-                         'Kp_mean', 'Ki_mean', 'Kd_mean', 'Actor_Loss', 'Critic_Loss'])
+        header = ['Episode', 'Reward', 'IAE', 'NormIAE', 'Effort', 'FinalError_deg',
+                  'SmoothDelta', 'SmoothJerk',
+                  'Kp_mean', 'Ki_mean', 'Kd_mean', 'Actor_Loss', 'Critic_Loss']
+        if is_drawing:
+            header += ['AvgWpMiss_mm', 'MaxWpMiss_mm']
+        writer.writerow(header)
+        
         for i in range(len(rewards)):
             gh = gain_history[i] if i < len(gain_history) else None
-            writer.writerow([
+            row = [
                 i+1,
                 f'{rewards[i]:.4f}',
                 f'{iaes[i]:.4f}',
+                f'{normalized_iaes[i]:.6f}' if normalized_iaes is not None and i < len(normalized_iaes) else '',
+                f'{efforts[i]:.6f}' if efforts is not None and i < len(efforts) else '',
                 f'{final_errors_deg[i]:.4f}',
+                f'{smooth_deltas[i]:.6f}' if smooth_deltas is not None and i < len(smooth_deltas) else '',
+                f'{smooth_jerks[i]:.6f}' if smooth_jerks is not None and i < len(smooth_jerks) else '',
                 f'{np.mean(gh["Kp"]):.4f}' if gh else '',
                 f'{np.mean(gh["Ki"]):.4f}' if gh else '',
                 f'{np.mean(gh["Kd"]):.4f}' if gh else '',
                 f'{actor_losses[i]:.6f}' if actor_losses[i] is not None else '',
                 f'{critic_losses[i]:.6f}' if critic_losses[i] is not None else '',
-            ])
+            ]
+            if is_drawing:
+                row.append(f'{cartesian_mm[i]:.2f}' if i < len(cartesian_mm) else '')
+                row.append(f'{max_wp_mm[i]:.2f}' if i < len(max_wp_mm) else '')
+            writer.writerow(row)
     print(f"📊 PID tuning CSV saved: {csv_path}")
+
+
+def _plot_pid_joint_tracking(commanded_traces, actual_traces, time_traces, joint_names,
+                             png_dir, timestamp, representative_idx=None,
+                             rewards=None, avg_wp_mm=None, max_wp_mm=None,
+                             plot_stem='pid_joint_tracking',
+                             title_prefix='PID Joint Tracking'):
+    """Create a deploy-style per-joint tracking plot for PID tuning episodes."""
+    valid = []
+    for ep_idx, (cmd_trace, act_trace) in enumerate(zip(commanded_traces, actual_traces)):
+        if not cmd_trace or not act_trace:
+            continue
+        cmd = np.degrees(np.asarray(cmd_trace, dtype=np.float64))
+        act = np.degrees(np.asarray(act_trace, dtype=np.float64))
+        if cmd.ndim != 2 or act.ndim != 2 or cmd.shape[1] != len(joint_names) or act.shape[1] != len(joint_names):
+            continue
+        common_len = min(len(cmd), len(act))
+        if common_len < 2:
+            continue
+        valid.append((ep_idx, cmd[:common_len], act[:common_len]))
+
+    if not valid:
+        return
+
+    if representative_idx is None:
+        representative_idx = valid[0][0]
+
+    representative = next((item for item in valid if item[0] == representative_idx), valid[0])
+    rep_ep_idx, rep_cmd, rep_act = representative
+
+    common_len_all = min(len(cmd) for _, cmd, _ in valid)
+    actual_stack = np.stack([act[:common_len_all] for _, _, act in valid], axis=0)
+    mean_actual = np.mean(actual_stack, axis=0)
+
+    rep_time = None
+    if time_traces and rep_ep_idx < len(time_traces):
+        t = np.asarray(time_traces[rep_ep_idx], dtype=np.float64)
+        if t.ndim == 1 and len(t) >= len(rep_cmd):
+            rep_time = t[:len(rep_cmd)]
+    if rep_time is None:
+        rep_time = np.arange(len(rep_cmd), dtype=np.float64) * 0.02
+
+    title_parts = [f"{title_prefix} (Representative Episode {rep_ep_idx + 1})"]
+    if rewards is not None and rep_ep_idx < len(rewards):
+        title_parts.append(f"Reward: {rewards[rep_ep_idx]:.2f}")
+    if avg_wp_mm is not None and rep_ep_idx < len(avg_wp_mm):
+        if avg_wp_mm[rep_ep_idx] is not None:
+            title_parts.append(f"Avg WP: {avg_wp_mm[rep_ep_idx]:.1f}mm")
+    if max_wp_mm is not None and rep_ep_idx < len(max_wp_mm):
+        if max_wp_mm[rep_ep_idx] is not None:
+            title_parts.append(f"Max WP: {max_wp_mm[rep_ep_idx]:.1f}mm")
+
+    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+    fig.suptitle(" | ".join(title_parts), fontsize=14, fontweight='bold')
+
+    for joint_idx, (ax, joint_name) in enumerate(zip(axes.ravel(), joint_names)):
+        for ep_idx, _, act in valid:
+            ax.plot(rep_time[:common_len_all], act[:common_len_all, joint_idx],
+                    color='gray', alpha=0.10, linewidth=0.8)
+        ax.plot(rep_time[:common_len_all], mean_actual[:, joint_idx],
+                color='black', alpha=0.85, linewidth=1.8, label='Mean actual')
+        ax.plot(rep_time, rep_cmd[:, joint_idx], 'r--', linewidth=2.0, label='Representative command')
+        ax.plot(rep_time, rep_act[:, joint_idx], color='tab:blue', linewidth=2.0, label='Representative actual')
+        ax.set_title(f'Joint: {joint_name}')
+        ax.set_xlabel('Time (sec)')
+        ax.set_ylabel('Angle (deg)')
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=8)
+
+    plt.tight_layout()
+    plot_path = os.path.join(png_dir, f'{plot_stem}_{timestamp}.png')
+    plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"📈 PID joint tracking plot saved: {plot_path}")
+
+
+def _plot_drawing_trajectory(all_paths, best_path, target_shape, png_dir, timestamp,
+                             plot_stem='pid_trajectory',
+                             title_prefix='PID Tuning (Drawing): Trajectory Quality'):
+    """Plot the actual tracked trajectory versus the target shape (2D + 3D)."""
+    if best_path is None or target_shape is None or len(best_path) == 0:
+        return
+    import numpy as _np
+
+    def _resample(path_xyz, n=220):
+        path_xyz = _np.asarray(path_xyz, dtype=_np.float64)
+        if len(path_xyz) < 2:
+            return None
+        t_old = _np.linspace(0.0, 1.0, len(path_xyz))
+        t_new = _np.linspace(0.0, 1.0, n)
+        out = _np.zeros((n, 3), dtype=_np.float64)
+        for k in range(3):
+            out[:, k] = _np.interp(t_new, t_old, path_xyz[:, k])
+        return out
+
+    # Inputs are in meters (FK output). Convert to mm once, deterministically.
+    target_m = _np.asarray(target_shape, dtype=_np.float64)
+    best_m = _np.asarray(best_path, dtype=_np.float64)
+    target = target_m * 1000.0
+    best = best_m * 1000.0
+
+    valid_paths = []
+    for p in all_paths:
+        if p is None or len(p) < 2:
+            continue
+        rp = _resample(_np.asarray(p, dtype=_np.float64), n=220)  # meters
+        if rp is not None:
+            valid_paths.append(rp * 1000.0)  # mm
+
+    best_r = _resample(best_m, n=220)
+    if best_r is not None:
+        best_r = best_r * 1000.0
+    else:
+        best_r = best
+
+    # Compute mean + band in Y/Z/X
+    if valid_paths:
+        stack = _np.stack(valid_paths, axis=0)
+        mean = _np.mean(stack, axis=0)
+        p10 = _np.percentile(stack, 10, axis=0)
+        p90 = _np.percentile(stack, 90, axis=0)
+    else:
+        mean = best_r
+        p10 = best_r
+        p90 = best_r
+
+    fig = plt.figure(figsize=(24, 7))
+    fig.suptitle(title_prefix, fontsize=16, fontweight='bold')
+    ax1 = fig.add_subplot(1, 3, 1)
+    ax2 = fig.add_subplot(1, 3, 2)
+    ax3 = fig.add_subplot(1, 3, 3, projection='3d')
+
+    # Panel 1: Y-Z with percentile band (removes redundancy vs arrow plot)
+    ty, tz = target[:, 1], target[:, 2]
+    target_y_closed = _np.append(ty, ty[0])
+    target_z_closed = _np.append(tz, tz[0])
+
+    ax1.plot(target_y_closed, target_z_closed, color='blue', linestyle='--', linewidth=2.5, label='Target Shape', zorder=10)
+    if valid_paths:
+        for p in valid_paths[::max(1, len(valid_paths)//60)]:
+            ax1.plot(p[:, 1], p[:, 2], color='gray', alpha=0.06, linewidth=0.8)
+    ax1.fill_betweenx(mean[:, 2], p10[:, 1], p90[:, 1], color='orange', alpha=0.15, label='P10–P90 band')
+    ax1.plot(mean[:, 1], mean[:, 2], color='darkorange', linewidth=3.0, label='Mean Trajectory', zorder=11)
+    ax1.plot(best_r[:, 1], best_r[:, 2], color='red', alpha=0.9, linewidth=2.0, label='Best Episode', zorder=12)
+    ax1.scatter(ty, tz, color='blue', s=25, zorder=13)
+    ax1.set_xlabel('Y (mm)')
+    ax1.set_ylabel('Z (mm)')
+    ax1.set_title(f'Board Plane (Y-Z)  |  Episodes: {len(valid_paths)}')
+    ax1.grid(True, alpha=0.3)
+    ax1.axis('equal')
+    ax1.legend(loc='lower left', fontsize=9)
+
+    # Panel 2: X drift vs progress (this is what 2D Y-Z hides)
+    ax2.plot(mean[:, 0], color='black', linewidth=2.5, label='Mean X')
+    ax2.fill_between(_np.arange(len(mean)), p10[:, 0], p90[:, 0], color='gray', alpha=0.2, label='P10–P90 X')
+    ax2.plot(best_r[:, 0], color='red', alpha=0.9, linewidth=2.0, label='Best X')
+    ax2.axhline(y=_np.mean(target[:, 0]), color='blue', linestyle='--', alpha=0.6, label='Target X mean')
+    ax2.set_xlabel('Progress (resampled)')
+    ax2.set_ylabel('X (mm)')
+    ax2.set_title('Off-Plane Drift (X over time)')
+    ax2.grid(True, alpha=0.3)
+    ax2.legend(fontsize=9)
+
+    # Panel 3: 3D view (readable defaults)
+    ax3.plot(target[:, 0], target[:, 1], target[:, 2], color='blue', linestyle='--', linewidth=2.0, label='Target')
+    ax3.plot(best_r[:, 0], best_r[:, 1], best_r[:, 2], color='red', linewidth=2.0, label='Best')
+    ax3.scatter(target[:, 0], target[:, 1], target[:, 2], color='blue', s=18)
+    ax3.scatter(best_r[0, 0], best_r[0, 1], best_r[0, 2], color='green', s=70, marker='*', label='Start')
+    ax3.scatter(best_r[-1, 0], best_r[-1, 1], best_r[-1, 2], color='purple', s=70, marker='X', label='End')
+    ax3.set_xlabel('X (mm)')
+    ax3.set_ylabel('Y (mm)')
+    ax3.set_zlabel('Z (mm)')
+    ax3.set_title('3D Trajectory')
+    ax3.view_init(elev=18, azim=-55)
+    ax3.legend(fontsize=9)
+
+    plt.tight_layout()
+    plot_path = os.path.join(png_dir, f'{plot_stem}_{timestamp}.png')
+    plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"📈 Trajectory plot saved: {plot_path}")
+
+
+def _compute_resampled_waypoint_errors(path_xyz, target_shape_xyz):
+    """Compare an actual path against ordered target waypoints after progress resampling."""
+    path = np.asarray(path_xyz, dtype=np.float64)
+    target = np.asarray(target_shape_xyz, dtype=np.float64)
+    if path.ndim != 2 or target.ndim != 2 or path.shape[1] != 3 or target.shape[1] != 3:
+        return None, None, None
+    if len(path) < 2 or len(target) < 2:
+        return None, None, None
+
+    t_old = np.linspace(0.0, 1.0, len(path))
+    t_new = np.linspace(0.0, 1.0, len(target))
+    resampled = np.zeros_like(target)
+    for axis in range(3):
+        resampled[:, axis] = np.interp(t_new, t_old, path[:, axis])
+
+    errors_mm = np.linalg.norm(resampled - target, axis=1) * 1000.0
+    return float(np.mean(errors_mm)), float(np.max(errors_mm)), errors_mm.tolist()
+
+
+def _plot_deploy_drawing_summary(endpoint_mm, avg_wp_mm, max_wp_mm, joint_errors, durations,
+                                 waypoint_errors, png_dir, timestamp, replay_rate_hz):
+    """Create a training-style deploy summary focused on drawing accuracy."""
+    if not endpoint_mm:
+        return
+
+    episodes = np.arange(1, len(endpoint_mm) + 1)
+
+    def rolling_avg(values, window=20):
+        out = []
+        for i in range(len(values)):
+            start = max(0, i - window + 1)
+            out.append(np.mean(values[start:i+1]))
+        return out
+
+    def rolling_rate(flags, window=50):
+        out = []
+        for i in range(len(flags)):
+            start = max(0, i - window + 1)
+            out.append(np.mean(flags[start:i+1]))
+        return out
+
+    valid_avg_wp = [v for v in avg_wp_mm if v is not None]
+    valid_max_wp = [v for v in max_wp_mm if v is not None]
+
+    fig, axes = plt.subplots(3, 3, figsize=(20, 15))
+    fig.suptitle(
+        f'Deploy Replay — Drawing Quality (Pi at {replay_rate_hz:.1f}Hz)',
+        fontsize=16,
+        fontweight='bold',
+    )
+
+    ax = axes[0, 0]
+    ax.plot(episodes, endpoint_mm, alpha=0.3, color='tab:blue', linewidth=1.5)
+    ax.plot(episodes, rolling_avg(endpoint_mm), color='navy', linewidth=3.0, label='Rolling Avg (20)')
+    ax.set_xlabel('Episode')
+    ax.set_ylabel('Endpoint Miss (mm)')
+    ax.set_title('Final Endpoint Error')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    ax = axes[0, 1]
+    avg_series = [np.nan if v is None else v for v in avg_wp_mm]
+    ax.plot(episodes, avg_series, alpha=0.3, color='purple', linewidth=1.5)
+    if valid_avg_wp:
+        ax.plot(episodes, rolling_avg([np.nanmean(avg_series[:i+1]) if np.isnan(avg_series[i]) else avg_series[i] for i in range(len(avg_series))]),
+                alpha=0.0)
+        ax.plot(episodes, np.array([np.nanmean(avg_series[max(0, i - 19):i+1]) for i in range(len(avg_series))]),
+                color='darkviolet', linewidth=3.0, label='Rolling Avg (20)')
+    ax.axhline(y=5.0, color='green', linestyle='--', alpha=0.5, label='5mm target')
+    ax.set_xlabel('Episode')
+    ax.set_ylabel('Avg Waypoint Miss (mm)')
+    ax.set_title('Per-Waypoint Cartesian Accuracy')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    ax = axes[0, 2]
+    max_series = [np.nan if v is None else v for v in max_wp_mm]
+    ax.plot(episodes, max_series, alpha=0.3, color='crimson', linewidth=1.5)
+    if valid_max_wp:
+        ax.plot(episodes, np.array([np.nanmean(max_series[max(0, i - 19):i+1]) for i in range(len(max_series))]),
+                color='darkred', linewidth=3.0, label='Rolling Avg (20)')
+    ax.axhline(y=10.0, color='orange', linestyle='--', alpha=0.5, label='10mm target')
+    ax.set_xlabel('Episode')
+    ax.set_ylabel('Max Waypoint Miss (mm)')
+    ax.set_title('Worst Waypoint Per Episode')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    ax = axes[1, 0]
+    ax.plot(episodes, joint_errors, alpha=0.3, color='tab:brown', linewidth=1.5)
+    ax.plot(episodes, rolling_avg(joint_errors), color='saddlebrown', linewidth=3.0, label='Rolling Avg (20)')
+    ax.set_xlabel('Episode')
+    ax.set_ylabel('Mean Joint Error (deg)')
+    ax.set_title('Joint Tracking Error')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    ax = axes[1, 1]
+    ax.plot(episodes, durations, alpha=0.3, color='tab:gray', linewidth=1.5)
+    ax.plot(episodes, rolling_avg(durations), color='black', linewidth=3.0, label='Rolling Avg (20)')
+    ax.set_xlabel('Episode')
+    ax.set_ylabel('Duration (s)')
+    ax.set_title('Episode Duration')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    ax = axes[1, 2]
+    ok_avg = [(v is not None and v <= 5.0) for v in avg_wp_mm]
+    ok_max = [(v is not None and v <= 10.0) for v in max_wp_mm]
+    ax.plot(episodes, rolling_rate(ok_avg, window=50), color='green', linewidth=2.5, label='P(AvgWP<=5mm) roll50')
+    ax.plot(episodes, rolling_rate(ok_max, window=50), color='orange', linewidth=2.5, label='P(MaxWP<=10mm) roll50')
+    ax.set_xlabel('Episode')
+    ax.set_ylabel('Rate')
+    ax.set_ylim(-0.02, 1.02)
+    ax.set_title('Quality Success Rates')
+    ax.legend(loc='lower right', fontsize=9)
+    ax.grid(True, alpha=0.3)
+
+    ax = axes[2, 0]
+    valid_wp_rows = [row for row in waypoint_errors if row]
+    if valid_wp_rows:
+        max_len = max(len(row) for row in valid_wp_rows)
+        mat = np.full((len(valid_wp_rows), max_len), np.nan, dtype=np.float64)
+        for row_idx, row in enumerate(valid_wp_rows):
+            arr = np.asarray(row, dtype=np.float64)
+            mat[row_idx, : min(max_len, len(arr))] = arr[:max_len]
+        mean_wp = np.nanmean(mat, axis=0)
+        p90_wp = np.nanpercentile(mat, 90, axis=0)
+        x = np.arange(1, len(mean_wp) + 1)
+        ax.plot(x, mean_wp, color='teal', linewidth=2.5, label='Mean WP error')
+        ax.plot(x, p90_wp, color='darkcyan', linewidth=2.5, label='P90 WP error')
+        ax.axhline(y=5.0, color='green', linestyle='--', alpha=0.4, label='5mm')
+        ax.axhline(y=10.0, color='orange', linestyle='--', alpha=0.4, label='10mm')
+        ax.set_xlabel('Waypoint Index')
+        ax.set_ylabel('Error (mm)')
+        ax.set_title('Waypoint Error Profile')
+        ax.legend(fontsize=9)
+        ax.grid(True, alpha=0.3)
+    else:
+        ax.text(0.05, 0.5, 'No waypoint profile', transform=ax.transAxes)
+        ax.set_title('Waypoint Error Profile')
+
+    ax = axes[2, 1]
+    paired = [(avg_wp_mm[i], joint_errors[i]) for i in range(len(avg_wp_mm)) if avg_wp_mm[i] is not None]
+    if paired:
+        avg_vals = np.array([item[0] for item in paired], dtype=np.float64)
+        joint_vals = np.array([item[1] for item in paired], dtype=np.float64)
+        ax.scatter(avg_vals, joint_vals, alpha=0.7, color='tab:blue')
+        ax.set_xlabel('Avg Waypoint Miss (mm)')
+        ax.set_ylabel('Mean Joint Error (deg)')
+        ax.set_title('Accuracy vs Joint Error')
+        ax.grid(True, alpha=0.3)
+    else:
+        ax.text(0.05, 0.5, 'No paired drawing metrics', transform=ax.transAxes)
+        ax.set_title('Accuracy vs Joint Error')
+
+    ax = axes[2, 2]
+    ax.axis('off')
+    summary_lines = [
+        'Deploy Summary (Drawing)',
+        '------------------------',
+        '',
+        f'Episodes: {len(endpoint_mm)}',
+        f'Replay Rate: {replay_rate_hz:.1f} Hz',
+        '',
+        f'Avg Endpoint Miss: {np.mean(endpoint_mm):.1f} mm',
+        f'Best Endpoint Miss: {np.min(endpoint_mm):.1f} mm',
+        f'Avg Joint Error: {np.mean(joint_errors):.2f} deg',
+        f'Avg Duration: {np.mean(durations):.2f} s',
+    ]
+    if valid_avg_wp:
+        summary_lines += [
+            '',
+            f'Avg WP Miss: {np.mean(valid_avg_wp):.1f} mm',
+            f'Best Avg WP: {np.min(valid_avg_wp):.1f} mm',
+            f'Avg Max WP: {np.mean(valid_max_wp):.1f} mm',
+            f'Best Max WP: {np.min(valid_max_wp):.1f} mm',
+        ]
+    ax.text(
+        0.1,
+        0.5,
+        '\n'.join(summary_lines),
+        transform=ax.transAxes,
+        fontsize=11,
+        verticalalignment='center',
+        fontfamily='monospace',
+        bbox=dict(boxstyle='round', facecolor='lightcyan', alpha=0.5),
+    )
+
+    plt.tight_layout()
+    plot_path = os.path.join(png_dir, f'deploy_tuning_{timestamp}.png')
+    plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"📊 Deploy tuning plot saved: {plot_path}")
 
 
 def main():
@@ -2364,12 +3769,15 @@ def main():
                         help='Path to checkpoint to load (optional)')
     parser.add_argument('--manual', action='store_true',
                         help='Start in manual test mode (skips menu)')
+    parser.add_argument('--control-backend', type=str, default=None,
+                        choices=sorted(SUPPORTED_CONTROL_BACKENDS),
+                        help='Motion backend: sim, sim_to_real_shadow, or real_replay')
     
     args = parser.parse_args()
     
     # If manual mode flag is set
     if args.manual:
-        manual_test_mode()
+        manual_control_mode(control_backend=args.control_backend)
         return
     
     # If agent is specified via command line, skip menu
@@ -2452,13 +3860,40 @@ def main():
         # PID Tuning (RL-Optimized PID Gains) — Sub-menu
         print("\n🎛️ PID Tuning Mode:")
         print("  a. 📍 Reaching (Random joint targets)")
-        print("  b. 🖋️  Drawing (Shape waypoints — requires IK, coming soon)")
+        print("  b. 🖋️  Drawing (Shape waypoints)")
         sub = input("Select (a/b, default=a): ").strip().lower()
-        if sub == 'b':
-            print("\n⚠️  Drawing mode uses joint-space targets for now (IK not ready)")
-            train_pid_tuning(mode='drawing')
-        else:
-            train_pid_tuning(mode='reaching')
+        mode = 'drawing' if sub == 'b' else 'reaching'
+        control_backend = prompt_pid_backend()
+        require_board_detection = input(
+            "Require live board detection? (y/N): "
+        ).strip().lower() == 'y'
+
+        replay_artifact_path = None
+        replay_gains_path = None
+        if control_backend == 'real_replay':
+            replay_artifact_path, replay_gains_path = prompt_pid_replay_paths(mode)
+
+        train_pid_tuning(
+            mode=mode,
+            control_backend=control_backend,
+            require_board_detection=require_board_detection,
+            replay_artifact_path=replay_artifact_path,
+            replay_gains_path=replay_gains_path,
+        )
+    elif choice == '8':
+        # Standalone Deploy to Pi
+        print("\n🚀 Standalone Deploy to Pi:")
+        print("  a. 📍 Reaching (Random joint targets)")
+        print("  b. 🖋️  Drawing (Shape waypoints)")
+        sub = input("Select (a/b, default=a): ").strip().lower()
+        mode = 'drawing' if sub == 'b' else 'reaching'
+        
+        replay_artifact_path, replay_gains_path = prompt_pid_replay_paths(mode)
+        _run_pid_real_replay(
+            mode=mode,
+            replay_artifact_path=replay_artifact_path,
+            replay_gains_path=replay_gains_path,
+        )
     else:
         print("❌ Invalid choice! Exiting...")
 

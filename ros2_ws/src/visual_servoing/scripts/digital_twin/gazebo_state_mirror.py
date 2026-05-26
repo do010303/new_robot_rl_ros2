@@ -2,7 +2,7 @@
 """
 Digital Twin: Gazebo State Mirror (Real-to-Sim)
 ================================================
-Subscribes to the Pi's /pca9685_servo/joint_states (DEGREES)
+Subscribes to the Pi's /pca9685_servo/joint_states (RADIANS)
 and publishes JointTrajectory commands to Gazebo's
 /arm_controller/joint_trajectory (RADIANS).
 
@@ -25,7 +25,7 @@ from builtin_interfaces.msg import Duration
 
 
 # ── Joint Mapping ──
-# Pi publishes in DEGREES, Gazebo expects RADIANS
+# Pi publishes in RADIANS, Gazebo expects RADIANS after offset removal.
 # We also need to handle the offset: Pi home is at 90° (π/2 rad)
 # whereas Gazebo home is at 0 rad.
 
@@ -34,7 +34,7 @@ ACTIVE_JOINTS = [
     ("base",        "Revolute 20", 90.0,  False),
     ("shoulder",    "Revolute 22",  90.0, False),
     ("elbow",       "Revolute 23",  90.0,   True),
-    ("wrist_roll",  "Revolute 26", 0.0,   True),  # J4
+    ("wrist_roll",  "Revolute 26", 90.0,   True),   # J4
     ("wrist_pitch", "Revolute 28", 90.0,  False),  # J5
     ("pen",         "Revolute 30", 90.0,  False),  # J6
 ]
@@ -48,10 +48,6 @@ ALL_GAZEBO_JOINTS = [
     "Revolute 20", "Revolute 22", "Revolute 23",
     "Revolute 26", "Revolute 28", "Revolute 30",
 ]
-
-
-def deg_to_rad(deg):
-    return deg * math.pi / 180.0
 
 
 class GazeboStateMirror(Node):
@@ -78,21 +74,19 @@ class GazeboStateMirror(Node):
 
         self.msg_count = 0
         self.get_logger().info("🪞 Real-to-Sim mirror started (4-DOF)")
-        self.get_logger().info("   Pi (degrees) → Gazebo (radians)")
+        self.get_logger().info("   Pi (radians) → Gazebo (radians)")
 
-    def pi_deg_to_gazebo_rad(self, pi_deg, home_deg, inverted):
-        """Convert Pi servo degrees to Gazebo radians.
-        
-        Pi servos: 0°-180°, home at home_deg
-        Gazebo:    radians, home at 0 rad
-        
-        Formula: gazebo_rad = (pi_deg - home_deg) * π/180
-        If inverted: negate the result
+    def pi_rad_to_gazebo_rad(self, pi_rad, home_deg, inverted):
+        """Convert Pi servo radians to Gazebo joint radians.
+
+        The Pi publishes absolute servo angles in radians. Gazebo expects
+        an offset from the servo's neutral home angle.
         """
+        pi_deg = math.degrees(pi_rad)
         offset_deg = pi_deg - home_deg
         if inverted:
             offset_deg = -offset_deg
-        return deg_to_rad(offset_deg)
+        return math.radians(offset_deg)
 
     def joint_states_callback(self, msg: JointState):
         pi_lookup = dict(zip(msg.name, msg.position))
@@ -112,7 +106,7 @@ class GazeboStateMirror(Node):
                 found = False
                 for pi_name, (gz_name, home, inv) in self.pi_to_gz.items():
                     if gz_name == gz_joint and pi_name in pi_lookup:
-                        rad = self.pi_deg_to_gazebo_rad(
+                        rad = self.pi_rad_to_gazebo_rad(
                             pi_lookup[pi_name], home, inv
                         )
                         point.positions.append(rad)

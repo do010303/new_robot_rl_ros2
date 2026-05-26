@@ -1,0 +1,15 @@
+vision_aruco_detector:
+  ros__parameters:
+    board_tracking_mode: static_locked
+    stable_frame_count: 30
+    publish_raw_board_pose: true
+    use_pose_cache: true
+    cache_timeout: 1.0
+    board_pose_topic: /vision/board_pose
+    raw_board_pose_topic: /vision/board_pose_raw
+    board_detected_topic: /vision/board_detected
+
+gazebo_drawing_visualizer:
+  ros__parameters:
+    lock_board_pose: true
+    use_ideal_board_rotation: true

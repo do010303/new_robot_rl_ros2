@@ -68,17 +68,23 @@ def _pos(M): return (M[0][3],M[1][3],M[2][3])
 
 # ── FK ───────────────────────────────────────────────────────────────────────
 
-def fk(q) -> Tuple[float,float,float]:
+def fk(q, raw=False) -> Tuple[float,float,float]:
     """
     Compute end-effector (bibut_1) position from base_link.
     q: 6 angles in radians [Rev20, Rev22, Rev23, Rev26, Rev28, Rev30]
+    raw: If True, treat q as raw URDF/Gazebo angles (no offset mapping).
+         If False (default), treat q as agent-space [0, π] and apply offset.
     Returns (x, y, z) in base_link frame.
     """
     if len(q)!=6: raise ValueError(f"Expected 6 joint angles, got {len(q)}")
     
-    # Map input from positive agent space [0, pi] down to internal URDF space [-pi/2, pi/2]
-    offsets = [1.570796, 1.570796, 1.570796, 3.141592, 1.570796, 1.570796]
-    q_int = [q[i] - offsets[i] for i in range(6)]
+    if raw:
+        # Raw URDF/Gazebo angles — use directly (for PID tuning, TF2 comparison, etc.)
+        q_int = list(q)
+    else:
+        # Map input from positive agent space [0, pi] down to internal URDF space
+        offsets = [1.570796, 1.570796, 1.570796, 3.141592, 1.570796, 1.570796]
+        q_int = [q[i] - offsets[i] for i in range(6)]
 
     # Fixed: base_link → old_component__6__1
     T_r6  = _T(-0.046528, 0.031724, 0.748891)
@@ -130,6 +136,51 @@ def fk(q) -> Tuple[float,float,float]:
         T_r32, T_r33
     )
     return _pos(T_ee)
+
+def fk_with_orientation(q, raw=False) -> Tuple[Tuple[float,float,float], Tuple[float,float,float]]:
+    """
+    Compute end-effector position and the pen pointing direction vector in base_link.
+    Returns:
+      pos: (x, y, z) end-effector position
+      v_pen: (vx, vy, vz) direction vector of the pen tip (pointing out)
+    """
+    if len(q)!=6: raise ValueError(f"Expected 6 joint angles, got {len(q)}")
+    
+    if raw:
+        q_int = list(q)
+    else:
+        offsets = [1.570796, 1.570796, 1.570796, 3.141592, 1.570796, 1.570796]
+        q_int = [q[i] - offsets[i] for i in range(6)]
+
+    T_r6  = _T(-0.046528, 0.031724, 0.748891)
+    T_r18 = _T(-0.093, 0.0, -0.01)
+    T_r19 = _T(0.04889, -0.028138, -0.00625)
+    T_j20 = _chain(_T(-0.034687, -0.0039, -0.0162), _Rz(-q_int[0]))
+    T_r21 = _T(-0.048931, -0.007, -0.033724)
+    T_j22 = _chain(_T(0.034687, -0.0192, -0.0039), _Ry(-q_int[1]))
+    T_j23 = _chain(_T(0.0, 0.0, -0.155), _Ry(q_int[2]))
+    T_r24 = _T(-0.0039, 0.0192, -0.034687)
+    T_r25 = _T(0.03375, 0.0362, -0.042816)
+    T_j26 = _chain(_T(0.0, -0.00995, -0.0148), _Rz(q_int[3]))
+    T_r27 = _T(0.0152, -0.023, -0.0425)
+    T_j28 = _chain(_T(-0.00995, -0.0148, 0.0), _Ry(-q_int[4]))
+    T_r29 = _T(-0.0152, 0.0075, -0.075)
+    T_j30 = _chain(_T(0.02045, 0.015, 0.0), _Ry(q_int[5]))
+    T_r32 = _T(0.0, 0.01225, -0.01)
+    T_r33 = _T(0.0, 0.0, -0.045)
+
+    T_ee = _chain(
+        T_r6, T_r18, T_r19, T_j20, T_r21, T_j22, T_j23,
+        T_r24, T_r25, T_j26, T_r27, T_j28, T_r29, T_j30,
+        T_r32, T_r33
+    )
+    pos = (T_ee[0][3], T_ee[1][3], T_ee[2][3])
+    # Pen points along the local -Z axis of the end-effector
+    # Rotation matrix elements: R[i][j] = T_ee[i][j]
+    # Z-axis is T_ee[0][2], T_ee[1][2], T_ee[2][2].
+    # -Z direction is negative of those.
+    v_pen = (-T_ee[0][2], -T_ee[1][2], -T_ee[2][2])
+    return pos, v_pen
 
 def test_fk():
     import sys

@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>hop_description</name>
+  <version>1.0.0</version>
+  <description>
+    HOP drone with 6-DOF robotic arm description package.
+    Supports ROS 2 Humble + Gazebo Harmonic (gz-sim8).
+  </description>
+  <maintainer email="ducanh@todo.todo">ducanh</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- Core dependencies -->
+  <depend>urdf</depend>
+  <depend>xacro</depend>
+  <depend>robot_state_publisher</depend>
+  <depend>joint_state_publisher</depend>
+  <depend>joint_state_publisher_gui</depend>
+
+  <!-- Gazebo Harmonic bridge (install with: sudo apt install ros-humble-ros-gzharmonic) -->
+  <!-- <exec_depend>ros_gz_sim</exec_depend> -->
+  <!-- <exec_depend>ros_gz_bridge</exec_depend> -->
+
+  <!-- Visualization -->
+  <exec_depend>rviz2</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

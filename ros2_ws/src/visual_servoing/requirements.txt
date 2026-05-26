@@ -1,0 +1,18 @@
+# Use a venv with --system-site-packages so ROS 2 Python packages remain visible:
+#   python3 -m venv --system-site-packages .venv
+#   source .venv/bin/activate
+#   pip install -U pip
+#   pip install -r ros2_ws/src/visual_servoing/requirements.txt
+#
+# The NumPy/SciPy pins avoid the currently broken combination where SciPy comes
+# from the Ubuntu/ROS stack but NumPy has been upgraded past SciPy's supported
+# range, which causes warnings and unstable optimizer behavior in PID/IK code.
+# `torch` is intentionally not pinned here. This repo already sees the system
+# torch through `--system-site-packages`, and pulling a fresh wheel often drags
+# in unnecessary multi-GB CUDA dependencies on laptops that train on CPU.
+numpy>=1.24,<1.25
+scipy>=1.10,<1.11
+matplotlib>=3.6,<3.8
+gymnasium>=0.29,<1.1
+opencv-contrib-python>=4.8,<4.11
+PyYAML>=6.0,<7

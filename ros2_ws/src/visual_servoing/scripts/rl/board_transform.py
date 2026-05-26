@@ -20,8 +20,15 @@ from geometry_msgs.msg import PoseStamped
 class BoardTransform:
     """Transforms points from board-local 2D to base_link 3D frame."""
     
-    def __init__(self, tf_buffer: tf2_ros.Buffer):
+    def __init__(
+        self,
+        tf_buffer: tf2_ros.Buffer,
+        lock_transform: bool = True,
+        use_ideal_rotation: bool = True,
+    ):
         self.tf_buffer = tf_buffer
+        self.lock_transform = lock_transform
+        self.use_ideal_rotation = use_ideal_rotation
         
         # T_vision: 4×4 board→camera (from ArUco PoseStamped)
         self.T_vision = None
@@ -31,20 +38,21 @@ class BoardTransform:
         self.T_combined = None
         
         self.locked = False
+        self.is_ready = False
     
     def update_from_pose(self, pose_msg: PoseStamped) -> bool:
         """
         Build transform from ArUco PoseStamped position + TF2.
         
-        Uses ArUco only for POSITION (where the board center is).
-        Uses a CLEAN rotation that maps board-local axes correctly:
-          - Board X (left/right) → base_link X
-          - Board Y (up/down)    → base_link -Z  (robot is flipped 180° on X)
-          - Board Z (depth)      → base_link +Y  (toward camera in flipped frame)
-        
-        This avoids the tilt errors from ArUco solvePnP rotation noise.
+        When lock_transform=True, the first valid transform is latched and reused.
+        When lock_transform=False, every valid pose updates the transform so the
+        rest of the stack is ready for future continuous board tracking.
+
+        If use_ideal_rotation=True, the measured board position is kept but the
+        board axes are aligned to an ideal vertical board. If False, the full
+        measured board rotation from solvePnP is used.
         """
-        if self.locked:
+        if self.lock_transform and self.locked:
             return True
         
         # Build T_vision (4×4 board→camera) from pose quaternion + translation
@@ -79,26 +87,24 @@ class BoardTransform:
         except Exception:
             return False
         
-        # Get board center in base_link (using full ArUco transform for position)
         T_full = self.T_tf2 @ self.T_vision
-        board_center_base = T_full[:3, 3]  # Translation = board origin in base_link
-        
-        # Build CLEAN T_combined using only the detected position
-        # but with an IDEAL rotation for a VERTICAL board placed in front of the drone:
-        #   Board X (right/left on face) → base_link -Y (since +Y is left)
-        #   Board Y (up/down on face) → base_link +Z (up)
-        #   Board Z (out of board) → base_link -X (towards drone)
-        R_ideal = np.array([
-            [ 0,  0, -1],   # board Z → base -X 
-            [-1,  0,  0],   # board X → base -Y 
-            [ 0,  1,  0],   # board Y → base +Z 
-        ], dtype=np.float64)
-        
-        self.T_combined = np.eye(4)
-        self.T_combined[:3, :3] = R_ideal
-        self.T_combined[:3, 3] = board_center_base
-        
-        self.locked = True
+
+        if self.use_ideal_rotation:
+            board_center_base = T_full[:3, 3]
+            R_ideal = np.array([
+                [0, 0, -1],
+                [-1, 0, 0],
+                [0, 1, 0],
+            ], dtype=np.float64)
+
+            self.T_combined = np.eye(4)
+            self.T_combined[:3, :3] = R_ideal
+            self.T_combined[:3, 3] = board_center_base
+        else:
+            self.T_combined = T_full
+
+        self.is_ready = True
+        self.locked = self.lock_transform
         return True
     
     def board_to_base(self, points_board: np.ndarray) -> np.ndarray:
@@ -148,3 +154,4 @@ class BoardTransform:
         self.T_tf2 = None
         self.T_combined = None
         self.locked = False
+        self.is_ready = False

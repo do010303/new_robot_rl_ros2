@@ -8,23 +8,13 @@ Spawns Gazebo + robot + controllers + ONE mirror node based on `mode`:
   mode:=sim_to_real  → Gazebo controls Pi (send trajectory in Gazebo, arm follows)
 
 ⚠️ Do NOT run both mirrors simultaneously — it creates a feedback loop!
-
-Usage:
-  ros2 launch visual_servoing digital_twin_test.launch.py mode:=real_to_sim
-  ros2 launch visual_servoing digital_twin_test.launch.py mode:=sim_to_real
 """
 
 import os
 from launch import LaunchDescription
-from launch.actions import (
-    IncludeLaunchDescription, TimerAction,
-    SetEnvironmentVariable, DeclareLaunchArgument
-)
+from launch.actions import IncludeLaunchDescription, TimerAction, SetEnvironmentVariable, DeclareLaunchArgument
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import (
-    Command, FindExecutable, PathJoinSubstitution,
-    LaunchConfiguration, PythonExpression
-)
+from launch.substitutions import Command, FindExecutable, PathJoinSubstitution, LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from launch_ros.parameter_descriptions import ParameterValue
@@ -34,7 +24,6 @@ from launch.conditions import IfCondition
 def generate_launch_description():
     pkg_share = FindPackageShare('visual_servoing').find('visual_servoing')
 
-    # Set resource path for Gazebo
     models_path = os.path.join(pkg_share, 'models')
     share_parent = os.path.dirname(pkg_share)
     gz_resource_path = os.environ.get('GZ_SIM_RESOURCE_PATH', '')
@@ -48,14 +37,17 @@ def generate_launch_description():
         value=new_gz_resource_path
     )
 
-    # Force Gazebo's internal gz-transport to localhost only.
-    # Prevents multicast flooding that crashes the Pi's Wi-Fi hotspot.
     set_gz_ip = SetEnvironmentVariable(
         name='GZ_IP',
         value='127.0.0.1'
     )
 
-    # ── Launch Arguments ──
+    control_backend_arg = DeclareLaunchArgument(
+        'control_backend',
+        default_value='sim',
+        description='Compatibility arg; Gazebo bring-up is unchanged.'
+    )
+
     mode_arg = DeclareLaunchArgument(
         'mode',
         default_value='real_to_sim',
@@ -63,7 +55,6 @@ def generate_launch_description():
     )
     mode = LaunchConfiguration('mode')
 
-    # URDF via xacro
     robot_description_content = Command([
         PathJoinSubstitution([FindExecutable(name="xacro")]),
         " ",
@@ -75,7 +66,6 @@ def generate_launch_description():
         "robot_description": ParameterValue(robot_description_content, value_type=str)
     }
 
-    # Robot State Publisher
     robot_state_publisher = Node(
         package='robot_state_publisher',
         executable='robot_state_publisher',
@@ -84,7 +74,6 @@ def generate_launch_description():
         parameters=[robot_description, {'use_sim_time': True}]
     )
 
-    # Gazebo with empty world
     gazebo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             PathJoinSubstitution([
@@ -94,7 +83,6 @@ def generate_launch_description():
         launch_arguments={'gz_args': 'empty.sdf -r'}.items()
     )
 
-    # Spawn robot
     spawn_entity = Node(
         package='ros_gz_sim',
         executable='create',
@@ -106,7 +94,6 @@ def generate_launch_description():
         output='screen'
     )
 
-    # Joint State Broadcaster
     jsb_spawner = TimerAction(
         period=8.0,
         actions=[
@@ -119,7 +106,6 @@ def generate_launch_description():
         ]
     )
 
-    # Arm Controller
     arm_controller_spawner = TimerAction(
         period=12.0,
         actions=[
@@ -132,9 +118,6 @@ def generate_launch_description():
         ]
     )
 
-    # ── Mirror Nodes (only ONE at a time!) ──
-
-    # Real-to-Sim: enabled when mode == 'real_to_sim'
     real_to_sim = TimerAction(
         period=14.0,
         actions=[
@@ -150,7 +133,6 @@ def generate_launch_description():
         ]
     )
 
-    # Sim-to-Real: enabled when mode == 'sim_to_real'
     sim_to_real = TimerAction(
         period=14.0,
         actions=[
@@ -167,6 +149,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        control_backend_arg,
         mode_arg,
         set_gz_resource_path,
         set_gz_ip,

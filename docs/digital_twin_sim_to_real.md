@@ -1,110 +1,51 @@
-# Digital Twin (Sim-to-Real) — command-sync (single move)
+# Digital Twin (Sim-to-Real) — Unified Pipeline
 
-This doc captures the working sequence to mirror **single-command** joint moves so Gazebo and the physical Pi arm move in sync *by time window*, without requiring encoder feedback.
+This doc captures the complete working sequence to train in Gazebo and deploy on the physical Pi robot arm.
 
-## Architecture (why timing was off before)
+## Architecture
 
-- Gazebo is driven by a timed `FollowJointTrajectory` action (smooth trajectory + explicit duration).
-- The old “mirror” approach sampled `/joint_states` at low rate and forwarded staircase targets to the Pi.
-- The Pi arm has no true joint feedback, so state mirroring can’t lock timing.
+- **Gazebo** (laptop): Runs simulation, scores RL episodes via `FollowJointTrajectory` action
+- **Pi** (Raspberry Pi 4): Runs `wicom_roboarm_unified_node.py` — direct PCA9685 I2C control of 6 servos
+- **Communication**: Laptop publishes to `/pca9685_servo/trajectory`, Pi publishes `/pca9685_servo/joint_states`
 
-The fix is **command mirroring**:
+### Topic Contract
 
-1) send the *same target* to Gazebo and the Pi at nearly the same time  
-2) include one shared duration  
-3) do not issue the next command until the motion window ends
+| Direction | Topic | Type | Units |
+|-----------|-------|------|-------|
+| Laptop → Pi | `/pca9685_servo/trajectory` | `JointTrajectory` | degrees |
+| Pi → Laptop | `/pca9685_servo/joint_states` | `JointState` | radians |
+| Laptop → Pi | `/pca9685_servo/command` | `JointState` | degrees |
+| Laptop → Pi | `/pca9685_servo/home` | `Trigger` service | — |
 
-## Topics
+### Joint Mapping (Gazebo ↔ Pi)
 
-- Immediate setpoint (old, still supported): `/pca9685_servo/command` (`sensor_msgs/JointState`)
-- Timed move (new): `/pca9685_servo/trajectory` (`trajectory_msgs/JointTrajectory`)
+| Gazebo Joint | Pi Joint | Home (deg) | Inverted | Servo | Pi Channel |
+|-------------|----------|-----------|----------|-------|------------|
+| Revolute 20 | base | 90 | No | TD-8120MG | CH0 |
+| Revolute 22 | shoulder | 90 | No | TD-8120MG | CH1 |
+| Revolute 23 | elbow | 90 | No | MG996R | CH4 |
+| Revolute 26 | wrist_roll | 90 | Yes | MG90S | CH8 |
+| Revolute 28 | wrist_pitch | 90 | No | MG90S | CH9 |
+| Revolute 30 | pen | 90 | No | MG90S | CH12 |
 
-Sending `/pca9685_servo/command` cancels any active timed trajectory on the Pi.
+---
 
-## Deploy to Pi (avoid nested folder)
-
-Bad (creates nested `wicom_roboarm/wicom_roboarm/...` if the folder already exists):
-
-```bash
-scp -r ./wicom_roboarm/ piros2@192.168.50.1:~/ros2_ws/src/wicom_roboarm
-```
-
-Good (copy into `src/`):
-
-```bash
-scp -r ./wicom_roboarm piros2@192.168.50.1:~/ros2_ws/src/
-```
-
-Best (keeps Pi folder in sync):
+## Deploy to Pi (sync code)
 
 ```bash
+# Best (keeps Pi folder in sync):
 rsync -av --delete ./wicom_roboarm/ piros2@192.168.50.1:~/ros2_ws/src/wicom_roboarm/
 ```
 
-If you already nested it, a safe fix is:
+---
 
-```bash
-cd ~/ros2_ws/src
-mv wicom_roboarm wicom_roboarm.bak
-mv wicom_roboarm.bak/wicom_roboarm wicom_roboarm
-```
+## Full Test Sequence
 
-## Discovery Server v2 and “Unknown topic”
+### Step 0: Network Setup
 
-When using Fast DDS Discovery Server v2, `ros2 topic list/info` may show only `/rosout` and `/parameter_events` unless the ROS 2 CLI is configured as a SUPER_CLIENT.
+Connect your laptop to the Pi's Wi-Fi hotspot (IP: `192.168.50.1`).
 
-### 1) Start server (Pi)
-
-```bash
-fastdds discovery -i 0 -l 192.168.50.1 -p 11811 &
-```
-
-### 2) Create SUPER_CLIENT profile (Pi)
-
-```bash
-cat > ~/super_client.xml <<'EOF'
-<?xml version="1.0" encoding="UTF-8" ?>
-<dds>
-  <profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
-    <participant profile_name="super_client_profile" is_default_profile="true">
-      <rtps>
-        <builtin>
-          <discovery_config>
-            <discoveryProtocol>SUPER_CLIENT</discoveryProtocol>
-            <discoveryServersList>
-              <RemoteServer prefix="44.53.00.5f.45.50.52.4f.53.49.4d.41">
-                <metatrafficUnicastLocatorList>
-                  <locator>
-                    <udpv4>
-                      <address>192.168.50.1</address>
-                      <port>11811</port>
-                    </udpv4>
-                  </locator>
-                </metatrafficUnicastLocatorList>
-              </RemoteServer>
-            </discoveryServersList>
-          </discovery_config>
-        </builtin>
-      </rtps>
-    </participant>
-  </profiles>
-</dds>
-EOF
-```
-
-### 3) Export env (each terminal that uses `ros2 ...`)
-
-```bash
-export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
-export ROS_DISCOVERY_SERVER="192.168.50.1:11811"
-export FASTRTPS_DEFAULT_PROFILES_FILE=~/super_client.xml
-export FASTDDS_DEFAULT_PROFILES_FILE=~/super_client.xml
-
-ros2 daemon stop
-ros2 daemon start
-```
-
-## Pi: build + run
+### Step 1: Start Pi Robot Node (Pi SSH terminal)
 
 ```bash
 cd ~/ros2_ws
@@ -114,44 +55,110 @@ source install/setup.bash
 ros2 launch wicom_roboarm wicom_roboarm.launch.py
 ```
 
-## Pi: local motion tests
+You should see the node log all 6 joints and their channel assignments.
 
-Immediate:
-
-```bash
-ros2 topic pub --once /pca9685_servo/command sensor_msgs/msg/JointState \
-"{name: ['base'], position: [135.0]}"
-```
-
-Timed:
-
-```bash
-ros2 topic pub --once -w 1 /pca9685_servo/trajectory trajectory_msgs/msg/JointTrajectory \
-"{joint_names: ['base'], points: [{positions: [135.0], time_from_start: {sec: 1, nanosec: 0}}]}"
-```
-
-## Laptop: run sim-to-real command-sync
-
-Gazebo terminal:
+### Step 2: Verify Connection (Laptop terminal 1)
 
 ```bash
 cd ~/new_rl_ros2/ros2_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
-export ROS_DISCOVERY_SERVER="192.168.50.1:11811"
-ros2 launch visual_servoing visual_servoing_test.launch.py digital_twin_mode:=sim_to_real
+export FASTRTPS_DEFAULT_PROFILES_FILE=~/new_rl_ros2/ros2_ws/src/visual_servoing/config/fastdds_twin.xml
+ros2 run visual_servoing verify_connection
 ```
 
-Control terminal:
+**Must print `✅ CONNECTION SUCCESSFUL!`** before proceeding. If it times out:
+1. Check both machines are on the same network
+2. Verify `fastdds_twin.xml` has the Pi IP (`192.168.50.1`)
+3. Verify the Pi node is running and publishing
+
+### Step 3: Launch Gazebo (Laptop terminal 2)
 
 ```bash
 cd ~/new_rl_ros2/ros2_ws
+source /opt/ros/humble/setup.bash
 source install/setup.bash
+# IMPORTANT: unset stale Discovery Server env vars from old sessions
+unset ROS_DISCOVERY_SERVER FASTRTPS_DEFAULT_PROFILES_FILE FASTDDS_DEFAULT_PROFILES_FILE
+ros2 launch visual_servoing visual_servoing_test.launch.py
+```
+
+Wait ~15 seconds for the robot arm to appear in Gazebo.
+
+### Step 4: Shadow Training (Laptop terminal 3)
+
+```bash
+cd ~/new_rl_ros2/ros2_ws/src/visual_servoing/scripts
+source /opt/ros/humble/setup.bash
+source ~/new_rl_ros2/ros2_ws/install/setup.bash
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
-export ROS_DISCOVERY_SERVER="192.168.50.1:11811"
-export VISUAL_SERVOING_DIGITAL_TWIN_MODE=sim_to_real
-cd src/visual_servoing/scripts
+export FASTRTPS_DEFAULT_PROFILES_FILE=~/new_rl_ros2/ros2_ws/src/visual_servoing/config/fastdds_twin.xml
+export PI_SHADOW_REPLAY_HZ=5.0
 python3 train_visual_servoing.py
 ```
 
+At the menu:
+1. Choose **`7`** (PID Tuning)
+2. Submode: **`a`** (Reaching) or **`b`** (Drawing)
+3. Backend: **`b`** (sim_to_real_shadow)
+4. Board detection: **`n`**
+
+Each episode:
+- RL agent tunes PID gains in Gazebo (fast, ~50Hz)
+- At episode end, the best trajectory is downsampled to the configured rate (e.g. `5.0` Hz) and replayed on the physical Pi robot.
+- **Segment Command Monitoring**: The terminal displays real-time segment-by-segment statuses:
+  `[SEG 1/15] Cmd: [base=90.0°, shoulder=90.0°, ...] | Actual: [base=89.8°, shoulder=90.2°, ...] | Status: OK | dur=0.20s`
+- **Telemetry Logs**: Detailed command-vs-actual joint data for every segment is logged directly on the computer to:
+  `training_results/logs/shadow_pid_episode_log_[timestamp].txt`
+- **Replay Telemetry Summary**: Replay finishes with a summary showing how many segments received fresh Pi joint-state feedback.
+- **Auto-Homing**: The physical robot automatically calls `/pca9685_servo/home` Trigger service after replay to reset state between episodes.
+
+### Step 5: Multi-Episode Deploy to Pi — Option 8 (Laptop terminal 3)
+
+After training, start the deployment workflow:
+
+```bash
+python3 train_visual_servoing.py
+```
+
+At the menu:
+1. Choose **`8`** (Deploy to Pi)
+2. Submode: **`a`** (Reaching) or **`b`** (Drawing)
+3. Select artifact: press **Enter** to use the latest training result
+4. Select gains: press **Enter** to use the latest gains
+5. **Parameters**:
+   - Number of episodes: input target run count (default `5`)
+   - Replay rate: type `5.0` or press **Enter** for default
+ 
+The script will run a structured multi-episode validation:
+- **Episode Loop**: For each run, it homes the arm, moves it to the starting pose, and executes the trajectory.
+- **Per-segment Printouts**: Displays live commanded vs actual angles and status for each step.
+- **Session Telemetry Logs**: Appends all segment metrics, packet loss indicators, and final Cartesian targets to:
+  `training_results/logs/deploy_replay_log_[timestamp].txt`
+- **Data & Plot Generation**:
+  - Saves the full session data structure to `training_results/pkl/deploy_results_*.pkl`.
+  - Saves a multi-panel comparison plot comparing the Commanded trajectory with the Actual trajectories of all runs overlaid to visualize repeatability:
+    `training_results/png/deploy_comparison_*.png`
+- **Clean Exit**: Automatically homes the arm on complete execution or Ctrl+C interruption.
+
+---
+
+## Simple Discovery Configuration
+
+The `fastdds_twin.xml` file (in `ros2_ws/src/visual_servoing/config/`) configures unicast peer discovery:
+
+```xml
+<initialPeersList>
+    <locator><udpv4><address>192.168.50.1</address></udpv4></locator>   <!-- Pi -->
+    <locator><udpv4><address>127.0.0.1</address></udpv4></locator>      <!-- localhost -->
+</initialPeersList>
+```
+
+Both machines must export:
+```bash
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+export FASTRTPS_DEFAULT_PROFILES_FILE=<path_to_fastdds_twin.xml>
+```
+
+> **Note**: The Gazebo terminal (Step 3) must NOT have these DDS variables set, otherwise Gazebo's internal transport breaks. Only the training terminal (Step 4/5) and verify_connection terminal (Step 2) need them.

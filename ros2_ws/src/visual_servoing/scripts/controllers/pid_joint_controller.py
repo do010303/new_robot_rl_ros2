@@ -52,7 +52,8 @@ class PIDJointController:
     DEFAULT_KD = 0.05
     
     def __init__(self, n_joints: int = 6, anti_windup_limit: float = 0.5,
-                 max_correction: float = 0.2):
+                 max_correction: float = 0.2,
+                 derivative_filter_alpha: float = 0.2):
         """
         Initialize PID controller for all joints.
         
@@ -61,10 +62,13 @@ class PIDJointController:
             anti_windup_limit: Maximum allowed integrator accumulation (radians)
             max_correction: Maximum PID correction per joint (radians).
                            Prevents runaway corrections in cascade position control.
+            derivative_filter_alpha: Low-pass coefficient for derivative filtering.
+                           Lower = smoother derivative, higher = more responsive.
         """
         self.n_joints = n_joints
         self.anti_windup_limit = anti_windup_limit
         self.max_correction = max_correction
+        self.derivative_filter_alpha = float(np.clip(derivative_filter_alpha, 0.01, 1.0))
         
         # PID gains (per-joint)
         self.Kp = np.ones(n_joints) * self.DEFAULT_KP
@@ -74,13 +78,18 @@ class PIDJointController:
         # Internal state
         self.integral = np.zeros(n_joints)
         self.prev_error = np.zeros(n_joints)
+        self.filtered_derivative = np.zeros(n_joints)
         self.first_step = True
         
         # Tracking metrics (accumulated per episode)
         self.cumulative_iae = 0.0         # Integral Absolute Error
         self.cumulative_effort = 0.0       # Control effort
+        self.cumulative_command_delta = 0.0
+        self.cumulative_command_jerk = 0.0
         self.step_count = 0
         self.error_history = []            # Per-step error norms
+        self.prev_command = None
+        self.prev_command_delta = None
     
     def set_gains(self, Kp: np.ndarray, Ki: np.ndarray, Kd: np.ndarray):
         """
@@ -159,8 +168,8 @@ class PIDJointController:
         # Proportional term
         p_term = self.Kp * error
         
-        # Integral term (with anti-windup clamping)
-        self.integral += error * dt
+        # Integral term (with leak to prevent windup-induced static overshoot)
+        self.integral = self.integral * 0.95 + error * dt
         self.integral = np.clip(self.integral, 
                                 -self.anti_windup_limit, 
                                 self.anti_windup_limit)
@@ -171,8 +180,12 @@ class PIDJointController:
             d_term = np.zeros(self.n_joints)
             self.first_step = False
         else:
-            derivative = (error - self.prev_error) / max(dt, 1e-6)
-            d_term = self.Kd * derivative
+            raw_derivative = (error - self.prev_error) / max(dt, 1e-6)
+            alpha = self.derivative_filter_alpha
+            self.filtered_derivative = (
+                alpha * raw_derivative + (1.0 - alpha) * self.filtered_derivative
+            )
+            d_term = self.Kd * self.filtered_derivative
         
         self.prev_error = error.copy()
         
@@ -182,6 +195,23 @@ class PIDJointController:
         
         # Output: corrected position command
         q_command = q_desired + correction
+
+        # Smoothness metrics based on commanded joint motion. This captures
+        # visible zig-zagging more directly than endpoint error or effort.
+        if self.prev_command is None:
+            current_command_delta = np.zeros(self.n_joints, dtype=np.float64)
+            step_command_delta = 0.0
+            step_command_jerk = 0.0
+        else:
+            current_command_delta = q_command - self.prev_command
+            step_command_delta = np.sum(np.abs(current_command_delta))
+            if self.prev_command_delta is None:
+                step_command_jerk = 0.0
+            else:
+                step_command_jerk = np.sum(np.abs(current_command_delta - self.prev_command_delta))
+
+        self.prev_command = q_command.copy()
+        self.prev_command_delta = current_command_delta.copy()
         
         # Update tracking metrics
         self.step_count += 1
@@ -189,6 +219,8 @@ class PIDJointController:
         step_effort = np.sum(correction ** 2)
         self.cumulative_iae += step_iae
         self.cumulative_effort += step_effort
+        self.cumulative_command_delta += step_command_delta
+        self.cumulative_command_jerk += step_command_jerk
         self.error_history.append(np.linalg.norm(error))
         
         return q_command
@@ -197,11 +229,24 @@ class PIDJointController:
         """Reset internal state for a new episode/movement."""
         self.integral = np.zeros(self.n_joints)
         self.prev_error = np.zeros(self.n_joints)
+        self.filtered_derivative = np.zeros(self.n_joints)
         self.first_step = True
         self.cumulative_iae = 0.0
         self.cumulative_effort = 0.0
+        self.cumulative_command_delta = 0.0
+        self.cumulative_command_jerk = 0.0
         self.step_count = 0
         self.error_history = []
+        self.prev_command = None
+        self.prev_command_delta = None
+
+    def soften_for_waypoint(self, integral_decay: float = 0.2):
+        """Reduce carried-over PID state at sharp waypoint boundaries."""
+        decay = float(np.clip(integral_decay, 0.0, 1.0))
+        self.integral *= decay
+        self.prev_error = np.zeros(self.n_joints)
+        self.filtered_derivative = np.zeros(self.n_joints)
+        self.first_step = True
     
     def get_gains_dict(self) -> Dict[str, np.ndarray]:
         """Return current gains as a dictionary (for logging/saving)."""
@@ -223,6 +268,8 @@ class PIDJointController:
             Dict with:
                 - iae: Integral Absolute Error (total across all joints/steps)
                 - effort: Total control effort
+                - command_delta: Total absolute change in commanded joints
+                - command_jerk: Total absolute change-of-change in commanded joints
                 - mean_error: Average per-step error norm
                 - max_error: Peak error norm
                 - steps: Number of control steps executed
@@ -230,6 +277,8 @@ class PIDJointController:
         return {
             'iae': self.cumulative_iae,
             'effort': self.cumulative_effort,
+            'command_delta': self.cumulative_command_delta,
+            'command_jerk': self.cumulative_command_jerk,
             'mean_error': np.mean(self.error_history) if self.error_history else 0.0,
             'max_error': np.max(self.error_history) if self.error_history else 0.0,
             'steps': self.step_count,

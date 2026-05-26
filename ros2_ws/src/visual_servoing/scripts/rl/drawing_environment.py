@@ -13,6 +13,7 @@ Features:
 
 import rclpy
 from rclpy.node import Node
+from rclpy.clock import JumpThreshold
 import numpy as np
 import time
 from typing import Tuple, Optional, List
@@ -45,22 +46,31 @@ class DrawingEnvironment(RLEnvironment):
                  waypoint_tolerance=0.01,
                  shape_type='triangle',
                  shape_size=0.06,
-                 x_plane=0.50,
+                 x_plane=-0.50,
                  randomize_shape=False,
-                 use_dynamic_workspace=True):
+                 use_dynamic_workspace=True,
+                 lock_board_pose=True,
+                 use_ideal_board_rotation=True,
+                 control_backend=None,
+                 mirror_safe_moves=True):
         """
         Initialize Drawing Environment with dynamic ArUco-based workspace.
         
         Args:
             max_episode_steps: Max steps per episode
             waypoint_tolerance: Distance to consider waypoint reached (1cm)
-            shape_type: 'triangle', 'square', 'line', or 'random_triangle'
+            shape_type: 'triangle', 'rounded_triangle', 'circle', 'square', 'line', or 'random_triangle'
             shape_size: Size of shape in meters (default 6cm)
             x_plane: Default X coordinate (overridden by board detection)
             randomize_shape: Whether to randomize shape position each episode
             use_dynamic_workspace: Enable ArUco board detection for workspace
         """
-        super().__init__(max_episode_steps=max_episode_steps, goal_tolerance=waypoint_tolerance)
+        super().__init__(
+            max_episode_steps=max_episode_steps,
+            goal_tolerance=waypoint_tolerance,
+            control_backend=control_backend,
+            mirror_safe_moves=mirror_safe_moves,
+        )
         
         self.get_logger().info("✏️ Initializing Drawing Environment...")
         
@@ -69,17 +79,34 @@ class DrawingEnvironment(RLEnvironment):
         self.shape_size = shape_size
         self.randomize_shape = randomize_shape
         self.use_dynamic_workspace = use_dynamic_workspace
+        self.lock_board_pose = lock_board_pose
+        self.use_ideal_board_rotation = use_ideal_board_rotation
+        self.last_board_status_log_time = 0.0
         
         # Board-local transform pipeline
         self.board_detected = False
         self.board_pose: Optional[PoseStamped] = None
-        # Use the x_plane parameter for the default forward distance, Y=0 (center line)
-        self.dynamic_workspace_center = np.array([x_plane, 0.0, 0.35])
+        # Fallback board center in base_link coordinates. The real/sim board sits
+        # in front of the arm at negative X in base_link, not +X in world.
+        fallback_x = -abs(float(x_plane)) if float(x_plane) > 0.0 else float(x_plane)
+        self.dynamic_workspace_center = np.array([fallback_x, 0.0, 0.60], dtype=np.float64)
         
         # TF2 for board transform
         self.drawing_tf_buffer = tf2_ros.Buffer()
         self.drawing_tf_listener = tf2_ros.TransformListener(self.drawing_tf_buffer, self)
-        self.board_transform = BoardTransform(self.drawing_tf_buffer)
+        self._drawing_tf_clock_jump_callback = self.get_clock().create_jump_callback(
+            JumpThreshold(
+                min_forward=Duration(seconds=3600.0),
+                min_backward=Duration(seconds=-1.0),
+                on_clock_change=True,
+            ),
+            post_callback=self._handle_drawing_tf_time_jump,
+        )
+        self.board_transform = BoardTransform(
+            self.drawing_tf_buffer,
+            lock_transform=lock_board_pose,
+            use_ideal_rotation=use_ideal_board_rotation,
+        )
         
         # Subscribe to board detection
         if self.use_dynamic_workspace:
@@ -138,6 +165,43 @@ class DrawingEnvironment(RLEnvironment):
         if self.use_dynamic_workspace:
             self.get_logger().info("⏳ Waiting for ArUco board detection...")
         self.get_logger().info("✅ Drawing Environment ready!")
+
+    def _fallback_board_to_base(self, points_board: np.ndarray) -> np.ndarray:
+        """Map board-local points onto the default vertical board in base_link.
+
+        When ArUco detection is disabled or unavailable, training still needs a
+        deterministic drawing plane in the robot frame. Reusing the same ideal
+        board orientation as BoardTransform keeps the fallback geometry aligned
+        with the real board-based path.
+        """
+        pts = np.atleast_2d(np.asarray(points_board, dtype=np.float64))
+        if pts.shape[1] == 3:
+            pts = np.hstack([pts, np.ones((pts.shape[0], 1), dtype=np.float64)])
+        elif pts.shape[1] != 4:
+            raise ValueError(f"Unexpected waypoint shape for fallback transform: {pts.shape}")
+
+        transform = np.eye(4, dtype=np.float64)
+        transform[:3, :3] = np.array([
+            [0.0, 0.0, -1.0],
+            [-1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ], dtype=np.float64)
+        transform[:3, 3] = self.dynamic_workspace_center
+
+        transformed = (transform @ pts.T).T
+        return transformed[:, :3]
+
+    def _handle_drawing_tf_time_jump(self, _jump_info):
+        """Clear drawing TF history when sim time jumps backward or clock changes."""
+        try:
+            self.drawing_tf_buffer.clear()
+        except Exception:
+            return
+
+        self.board_transform.reset()
+        self.board_detected = False
+        self.board_pose = None
+        self.get_logger().warn("⏱️ Sim-time jump detected — cleared Drawing TF buffer")
     
     def _board_callback(self, msg: PoseStamped):
         """Build board-to-base_link transform from ArUco detection.
@@ -146,10 +210,10 @@ class DrawingEnvironment(RLEnvironment):
         with TF2 (camera->base_link) for the complete transform pipeline.
         Board-local shapes will be transformed through this pipeline.
         """
-        if self.board_detected:
-            return  # Already locked
-        
         # Build combined transform: board-local -> camera -> base_link
+        if self.board_transform.lock_transform and self.board_transform.locked and self.board_detected:
+            return
+
         success = self.board_transform.update_from_pose(msg)
         
         if not success:
@@ -163,10 +227,19 @@ class DrawingEnvironment(RLEnvironment):
         center = self.board_transform.get_board_center_base()
         self.dynamic_workspace_center = center
         
-        self.get_logger().info(
-            f"🔒 Board LOCKED (board->base_link transform ready)\n"
-            f"   Board center at base_link: [{center[0]:.3f}, {center[1]:.3f}, {center[2]:.3f}]"
-        )
+        if self.board_transform.lock_transform:
+            self.get_logger().info(
+                f"🔒 Board LOCKED (board->base_link transform ready)\n"
+                f"   Board center at base_link: [{center[0]:.3f}, {center[1]:.3f}, {center[2]:.3f}]"
+            )
+        else:
+            now = time.time()
+            if now - self.last_board_status_log_time >= 5.0:
+                self.last_board_status_log_time = now
+                self.get_logger().info(
+                    f"📡 Board updated (continuous tracking)\n"
+                    f"   Board center at base_link: [{center[0]:.3f}, {center[1]:.3f}, {center[2]:.3f}]"
+                )
     
     def wait_for_initial_detection(self, timeout_sec=10.0):
         """Wait for initial ArUco board detection before training."""
@@ -201,23 +274,36 @@ class DrawingEnvironment(RLEnvironment):
                 size=self.shape_size, 
                 points_per_edge=POINTS_PER_EDGE
             )
+        elif self.shape_type == 'rounded_triangle':
+            shape = self.shape_generator.rounded_triangle(
+                size=self.shape_size,
+                points_per_edge=POINTS_PER_EDGE
+            )
         elif self.shape_type == 'dense_triangle':
             shape = self.shape_generator.dense_triangle(size=self.shape_size, points_per_edge=10)
+        elif self.shape_type == 'circle':
+            shape = self.shape_generator.circle(
+                diameter=self.shape_size,
+                n_points=POINTS_PER_EDGE * 3 + 1
+            )
         elif self.shape_type == 'square':
-            shape = self.shape_generator.square(size=self.shape_size)
+            shape = self.shape_generator.square(
+                size=self.shape_size,
+                points_per_edge=POINTS_PER_EDGE
+            )
         elif self.shape_type == 'line':
             shape = self.shape_generator.line(length=self.shape_size)
         elif self.shape_type == 'random_triangle':
             shape = self.shape_generator.random_triangle(min_size=0.05, max_size=self.shape_size)
         else:
-            self.get_logger().warn(f"Unknown shape type {self.shape_type}, falling back to triangle")
-            shape = self.shape_generator.equilateral_triangle(
+            self.get_logger().warn(f"Unknown shape type {self.shape_type}, falling back to rounded_triangle")
+            shape = self.shape_generator.rounded_triangle(
                 size=self.shape_size,
                 points_per_edge=POINTS_PER_EDGE
             )
         
         # 2. Transform waypoints: board-local -> base_link
-        if self.board_transform.locked:
+        if self.board_transform.is_ready:
             base_pts = self.board_transform.board_to_base(shape.waypoints)
             shape.waypoints = base_pts  # Now (N, 3) in base_link frame
             self.get_logger().info(
@@ -225,7 +311,14 @@ class DrawingEnvironment(RLEnvironment):
                 f"(center: [{base_pts.mean(axis=0)[0]:.3f}, {base_pts.mean(axis=0)[1]:.3f}, {base_pts.mean(axis=0)[2]:.3f}])"
             )
         else:
-            self.get_logger().warn("⚠️ Board transform not ready — using raw board-local coords")
+            base_pts = self._fallback_board_to_base(shape.waypoints)
+            shape.waypoints = base_pts
+            self.get_logger().warn(
+                "⚠️ Board transform not ready — using default board plane fallback "
+                f"at [{self.dynamic_workspace_center[0]:.3f}, "
+                f"{self.dynamic_workspace_center[1]:.3f}, "
+                f"{self.dynamic_workspace_center[2]:.3f}]"
+            )
         
         return shape
     
@@ -285,8 +378,11 @@ class DrawingEnvironment(RLEnvironment):
         self._reset_line_visualization()
         
         # Move to home
-        self._move_to_joint_positions(np.zeros(6), duration=2.0)
-        time.sleep(0.5)
+        success = self._move_to_joint_positions(np.zeros(6), duration=2.0)
+        if not success:
+            self.get_logger().warn(
+                "⚠️ Drawing reset home move reported failure; continuing with episode reset"
+            )
         
         # Set first waypoint and publish
         if len(self.waypoints) > 0:
@@ -294,8 +390,7 @@ class DrawingEnvironment(RLEnvironment):
             self.target_x, self.target_y, self.target_z = wp[0], wp[1], wp[2]
             self._publish_target(wp)
             self._publish_shape()  # Publish full shape outline
-        
-        time.sleep(0.2)
+            
         self.get_logger().info(f"✅ Drawing reset! Shape: {self.current_shape.name}")
         return self.get_state()
     

@@ -55,3 +55,7 @@ ref/buffer best/
 .gemini/
 *.log
 ref/
+
+# === Python virtual environments ===
+.venv/
+

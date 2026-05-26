@@ -1,0 +1,1492 @@
+<sdf version='1.11'>
+  <model name='hop'>
+    <joint name='fixed_to_world' type='fixed'>
+      <pose relative_to='__model__'>0 0 0 0 0 0</pose>
+      <parent>world</parent>
+      <child>base_link</child>
+    </joint>
+    <link name='base_link'>
+      <pose relative_to='fixed_to_world'>0 0 0 0 0 0</pose>
+      <inertial>
+        <pose>0.0053087147973136786 -0.0003036906064598182 0.78101838990574979 0 0 0</pose>
+        <mass>2.001485572301593</mass>
+        <inertia>
+          <ixx>0.01203924031438142</ixx>
+          <ixy>4.5054283409606997e-08</ixy>
+          <ixz>0.00044447834304171119</ixz>
+          <iyy>0.013769205940207471</iyy>
+          <iyz>3.4363728129385061e-07</iyz>
+          <izz>0.0219853206285456</izz>
+        </inertia>
+      </inertial>
+      <collision name='base_link_collision'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/base_link.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode/>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__frame_arm_3_1_collision_1'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/frame_arm_3_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode/>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__motor_3_1_collision_2'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/motor_3_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode/>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__frame_arm_4_1_collision_3'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/frame_arm_4_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode/>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__motor_4_1_collision_4'>
+        <pose>-2.0816681711721691e-17 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/motor_4_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode/>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__frame_arm_1_1_collision_5'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/frame_arm_1_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode/>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__motor_1_1_collision_6'>
+        <pose>0 -2.0816681711721691e-17 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/motor_1_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode/>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__frame_mount_1_collision_7'>
+        <pose>0 6.9388939039072284e-18 -1.110223024625157e-16 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/frame_mount_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode/>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__payload_bracket_1_1_collision_8'>
+        <pose>0 6.9388939039072284e-18 -1.110223024625157e-16 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/payload_bracket_1_1.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__camera_1_1_collision_9'>
+        <pose>0 6.9388939039072284e-18 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/camera_1_1.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__frame_arm_2_1_collision_10'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/frame_arm_2_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode/>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__motor_2_1_collision_11'>
+        <pose>1.387778780781446e-17 6.9388939039072284e-18 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/motor_2_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode/>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__landing_gear_1_1_collision_12'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/landing_gear_1_1.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__landing_gear_2_1_collision_13'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/landing_gear_2_1.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__arm_mount_bracket_1_1_collision_14'>
+        <pose>1.387778780781446e-17 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/arm_mount_bracket_1_1.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__robotic_arm_rotor_1_1_collision_15'>
+        <pose>1.387778780781446e-17 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/robotic_arm_rotor_1_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode/>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='base_link_fixed_joint_lump__payload_bracket_2_1_collision_16'>
+        <pose>1.387778780781446e-17 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/payload_bracket_2_1.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <visual name='base_link_visual'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/base_link.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.970000029 0.970000029 0.930000007 1</ambient>
+          <diffuse>0.970000029 0.970000029 0.930000007 1</diffuse>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__frame_arm_3_1_visual_1'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/frame_arm_3_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.970000029 0.970000029 0.930000007 1</ambient>
+          <diffuse>0.970000029 0.970000029 0.930000007 1</diffuse>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__motor_3_1_visual_2'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/motor_3_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.629999995 0.629999995 0.629999995 1</ambient>
+          <diffuse>0.629999995 0.629999995 0.629999995 1</diffuse>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__frame_arm_4_1_visual_3'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/frame_arm_4_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.970000029 0.970000029 0.930000007 1</ambient>
+          <diffuse>0.970000029 0.970000029 0.930000007 1</diffuse>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__motor_4_1_visual_4'>
+        <pose>-2.0816681711721691e-17 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/motor_4_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.629999995 0.629999995 0.629999995 1</ambient>
+          <diffuse>0.629999995 0.629999995 0.629999995 1</diffuse>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__frame_arm_1_1_visual_5'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/frame_arm_1_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.970000029 0.970000029 0.930000007 1</ambient>
+          <diffuse>0.970000029 0.970000029 0.930000007 1</diffuse>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__motor_1_1_visual_6'>
+        <pose>0 -2.0816681711721691e-17 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/motor_1_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.629999995 0.629999995 0.629999995 1</ambient>
+          <diffuse>0.629999995 0.629999995 0.629999995 1</diffuse>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__frame_mount_1_visual_7'>
+        <pose>0 6.9388939039072284e-18 -1.110223024625157e-16 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/frame_mount_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.629999995 0.629999995 0.629999995 1</ambient>
+          <diffuse>0.629999995 0.629999995 0.629999995 1</diffuse>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__payload_bracket_1_1_visual_8'>
+        <pose>0 6.9388939039072284e-18 -1.110223024625157e-16 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/payload_bracket_1_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <diffuse>0.784313738 0.784313738 0.784313738 1</diffuse>
+          <ambient>0.784313738 0.784313738 0.784313738 1</ambient>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__camera_1_1_visual_9'>
+        <pose>0 6.9388939039072284e-18 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/camera_1_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <diffuse>0.784313738 0.784313738 0.784313738 1</diffuse>
+          <ambient>0.784313738 0.784313738 0.784313738 1</ambient>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__frame_arm_2_1_visual_10'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/frame_arm_2_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.970000029 0.970000029 0.930000007 1</ambient>
+          <diffuse>0.970000029 0.970000029 0.930000007 1</diffuse>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__motor_2_1_visual_11'>
+        <pose>1.387778780781446e-17 6.9388939039072284e-18 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/motor_2_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.629999995 0.629999995 0.629999995 1</ambient>
+          <diffuse>0.629999995 0.629999995 0.629999995 1</diffuse>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__landing_gear_1_1_visual_12'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/landing_gear_1_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <diffuse>1 1 1 1</diffuse>
+          <ambient>1 1 1 1</ambient>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__landing_gear_2_1_visual_13'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/landing_gear_2_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <diffuse>1 1 1 1</diffuse>
+          <ambient>1 1 1 1</ambient>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__arm_mount_bracket_1_1_visual_14'>
+        <pose>1.387778780781446e-17 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/arm_mount_bracket_1_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <diffuse>1 1 1 1</diffuse>
+          <ambient>1 1 1 1</ambient>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__robotic_arm_rotor_1_1_visual_15'>
+        <pose>1.387778780781446e-17 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/robotic_arm_rotor_1_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.0799999982 0.0799999982 0.0799999982 1</ambient>
+          <diffuse>0.0799999982 0.0799999982 0.0799999982 1</diffuse>
+        </material>
+      </visual>
+      <visual name='base_link_fixed_joint_lump__payload_bracket_2_1_visual_16'>
+        <pose>1.387778780781446e-17 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/payload_bracket_2_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <diffuse>0.784313738 0.784313738 0.784313738 1</diffuse>
+          <ambient>0.784313738 0.784313738 0.784313738 1</ambient>
+        </material>
+      </visual>
+    </link>
+    <joint name='rotor_joint_3' type='revolute'>
+      <pose relative_to='base_link'>0.158912 0.15859300000000001 0.84104299999999999 0 0 0</pose>
+      <parent>base_link</parent>
+      <child>rotor_3_1</child>
+      <axis>
+        <xyz>0 0 1</xyz>
+        <limit>
+          <lower>0</lower>
+          <upper>6.2831849999999996</upper>
+          <effort>100</effort>
+          <velocity>100</velocity>
+        </limit>
+        <dynamics>
+          <damping>0.01</damping>
+          <friction>0.01</friction>
+          <spring_reference>0</spring_reference>
+          <spring_stiffness>0</spring_stiffness>
+        </dynamics>
+      </axis>
+    </joint>
+    <link name='rotor_3_1'>
+      <pose relative_to='rotor_joint_3'>0 0 0 0 0 0</pose>
+      <inertial>
+        <pose>-4.8554883327889264e-07 7.8166770278720321e-08 -0.01117284050486678 0 0 0</pose>
+        <mass>0.010177599076157499</mass>
+        <inertia>
+          <ixx>9.9999999999999995e-07</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>4.6999999999999997e-05</iyy>
+          <iyz>0</iyz>
+          <izz>4.6999999999999997e-05</izz>
+        </inertia>
+      </inertial>
+      <collision name='rotor_3_1_collision'>
+        <pose>-0.158912 -0.15859300000000001 -0.84104299999999999 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/rotor_3_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode/>
+          </friction>
+        </surface>
+      </collision>
+      <visual name='rotor_3_1_visual'>
+        <pose>-0.158912 -0.15859300000000001 -0.84104299999999999 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/rotor_3_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.800000012 0.800000012 0.800000012 1</ambient>
+          <diffuse>0.800000012 0.800000012 0.800000012 1</diffuse>
+        </material>
+      </visual>
+    </link>
+    <joint name='rotor_joint_4' type='revolute'>
+      <pose relative_to='base_link'>-0.15890099999999999 0.15860399999999999 0.84104299999999999 0 0 0</pose>
+      <parent>base_link</parent>
+      <child>rotor_4_1</child>
+      <axis>
+        <xyz>0 0 1</xyz>
+        <limit>
+          <lower>0</lower>
+          <upper>6.2831849999999996</upper>
+          <effort>100</effort>
+          <velocity>100</velocity>
+        </limit>
+        <dynamics>
+          <damping>0.01</damping>
+          <friction>0.01</friction>
+          <spring_reference>0</spring_reference>
+          <spring_stiffness>0</spring_stiffness>
+        </dynamics>
+      </axis>
+    </joint>
+    <link name='rotor_4_1'>
+      <pose relative_to='rotor_joint_4'>0 0 0 0 0 0</pose>
+      <inertial>
+        <pose>-3.0623931573936503e-07 -2.3153657632835059e-07 -0.011172840504866669 0 0 0</pose>
+        <mass>0.010177599076157499</mass>
+        <inertia>
+          <ixx>9.9999999999999995e-07</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>4.6999999999999997e-05</iyy>
+          <iyz>0</iyz>
+          <izz>4.6999999999999997e-05</izz>
+        </inertia>
+      </inertial>
+      <collision name='rotor_4_1_collision'>
+        <pose>0.15890099999999999 -0.15860399999999999 -0.84104299999999999 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/rotor_4_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode/>
+          </friction>
+        </surface>
+      </collision>
+      <visual name='rotor_4_1_visual'>
+        <pose>0.15890099999999999 -0.15860399999999999 -0.84104299999999999 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/rotor_4_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.800000012 0.800000012 0.800000012 1</ambient>
+          <diffuse>0.800000012 0.800000012 0.800000012 1</diffuse>
+        </material>
+      </visual>
+    </link>
+    <joint name='rotor_joint_1' type='revolute'>
+      <pose relative_to='base_link'>-0.158912 -0.15920899999999999 0.84104299999999999 0 0 0</pose>
+      <parent>base_link</parent>
+      <child>rotor_1_1</child>
+      <axis>
+        <xyz>0 0 1</xyz>
+        <limit>
+          <lower>0</lower>
+          <upper>6.2831849999999996</upper>
+          <effort>100</effort>
+          <velocity>100</velocity>
+        </limit>
+        <dynamics>
+          <damping>0.01</damping>
+          <friction>0.01</friction>
+          <spring_reference>0</spring_reference>
+          <spring_stiffness>0</spring_stiffness>
+        </dynamics>
+      </axis>
+    </joint>
+    <link name='rotor_1_1'>
+      <pose relative_to='rotor_joint_1'>0 0 0 0 0 0</pose>
+      <inertial>
+        <pose>3.4640301738164681e-09 -5.2227058788822938e-08 -0.01117284050486622 0 0 0</pose>
+        <mass>0.010177599076157499</mass>
+        <inertia>
+          <ixx>9.9999999999999995e-07</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>4.6999999999999997e-05</iyy>
+          <iyz>0</iyz>
+          <izz>4.6999999999999997e-05</izz>
+        </inertia>
+      </inertial>
+      <collision name='rotor_1_1_collision'>
+        <pose>0.158912 0.15920899999999999 -0.84104299999999999 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/rotor_1_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode/>
+          </friction>
+        </surface>
+      </collision>
+      <visual name='rotor_1_1_visual'>
+        <pose>0.158912 0.15920899999999999 -0.84104299999999999 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/rotor_1_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.800000012 0.800000012 0.800000012 1</ambient>
+          <diffuse>0.800000012 0.800000012 0.800000012 1</diffuse>
+        </material>
+      </visual>
+    </link>
+    <joint name='rotor_joint_2' type='revolute'>
+      <pose relative_to='base_link'>0.15890099999999999 -0.15922 0.84104299999999999 0 0 0</pose>
+      <parent>base_link</parent>
+      <child>rotor_2_1</child>
+      <axis>
+        <xyz>0 0 1</xyz>
+        <limit>
+          <lower>0</lower>
+          <upper>6.2831849999999996</upper>
+          <effort>100</effort>
+          <velocity>100</velocity>
+        </limit>
+        <dynamics>
+          <damping>0.01</damping>
+          <friction>0.01</friction>
+          <spring_reference>0</spring_reference>
+          <spring_stiffness>0</spring_stiffness>
+        </dynamics>
+      </axis>
+    </joint>
+    <link name='rotor_2_1'>
+      <pose relative_to='rotor_joint_2'>0 0 0 0 0 0</pose>
+      <inertial>
+        <pose>-1.758454863109993e-07 2.5747628731864758e-07 -0.01127284050486799 0 0 0</pose>
+        <mass>0.010177599076157499</mass>
+        <inertia>
+          <ixx>9.9999999999999995e-07</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>4.6999999999999997e-05</iyy>
+          <iyz>0</iyz>
+          <izz>4.6999999999999997e-05</izz>
+        </inertia>
+      </inertial>
+      <collision name='rotor_2_1_collision'>
+        <pose>-0.15890099999999999 0.15922 -0.84104299999999999 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/rotor_2_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode/>
+          </friction>
+        </surface>
+      </collision>
+      <visual name='rotor_2_1_visual'>
+        <pose>-0.15890099999999999 0.15922 -0.84104299999999999 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/rotor_2_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.800000012 0.800000012 0.800000012 1</ambient>
+          <diffuse>0.800000012 0.800000012 0.800000012 1</diffuse>
+        </material>
+      </visual>
+    </link>
+    <joint name='arm_joint_1' type='revolute'>
+      <pose relative_to='base_link'>-0.010824999999999989 -0.00031399999999999478 0.70144099999999998 0 0 0</pose>
+      <parent>base_link</parent>
+      <child>robotic_arm_link_1_1</child>
+      <axis>
+        <xyz>0 0 -1</xyz>
+        <limit>
+          <lower>-3.1415929999999999</lower>
+          <upper>3.1415929999999999</upper>
+          <effort>100</effort>
+          <velocity>100</velocity>
+        </limit>
+        <dynamics>
+          <damping>0.10000000000000001</damping>
+          <friction>0.10000000000000001</friction>
+          <spring_reference>0</spring_reference>
+          <spring_stiffness>0</spring_stiffness>
+        </dynamics>
+      </axis>
+    </joint>
+    <link name='robotic_arm_link_1_1'>
+      <pose relative_to='arm_joint_1'>0 0 0 0 0 0</pose>
+      <inertial>
+        <pose>-0.017366406263850071 0.0017137255044288029 -0.025612335022011979 0 0 0</pose>
+        <mass>0.14320055923957331</mass>
+        <inertia>
+          <ixx>5.2485694150995422e-05</ixx>
+          <ixy>1.533484003337219e-06</ixy>
+          <ixz>-1.9571204885490782e-05</ixz>
+          <iyy>7.2669486831409175e-05</iyy>
+          <iyz>6.2005743866905373e-07</iyz>
+          <izz>6.6844119270454745e-05</izz>
+        </inertia>
+      </inertial>
+      <collision name='robotic_arm_link_1_1_collision'>
+        <pose>0.010825 0.00031399999999999999 -0.70144099999999998 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/robotic_arm_link_1_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode/>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='robotic_arm_link_1_1_fixed_joint_lump__robotic_arm_rotor_2_1_collision_1'>
+        <pose>0.010824999999999989 0.00031399999999999999 -0.70144099999999998 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/robotic_arm_rotor_2_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode/>
+          </friction>
+        </surface>
+      </collision>
+      <visual name='robotic_arm_link_1_1_visual'>
+        <pose>0.010825 0.00031399999999999999 -0.70144099999999998 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/robotic_arm_link_1_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.850000024 0.850000024 0.850000024 1</ambient>
+          <diffuse>0.850000024 0.850000024 0.850000024 1</diffuse>
+        </material>
+      </visual>
+      <visual name='robotic_arm_link_1_1_fixed_joint_lump__robotic_arm_rotor_2_1_visual_1'>
+        <pose>0.010824999999999989 0.00031399999999999999 -0.70144099999999998 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/robotic_arm_rotor_2_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.0799999982 0.0799999982 0.0799999982 1</ambient>
+          <diffuse>0.0799999982 0.0799999982 0.0799999982 1</diffuse>
+        </material>
+      </visual>
+    </link>
+    <joint name='arm_joint_2' type='revolute'>
+      <pose relative_to='robotic_arm_link_1_1'>-0.014244 -0.026200000000000001 -0.037623999999999998 0 0 0</pose>
+      <parent>robotic_arm_link_1_1</parent>
+      <child>robotic_arm_link_2_1</child>
+      <axis>
+        <xyz>0 -1 0</xyz>
+        <limit>
+          <lower>-1.5707960000000001</lower>
+          <upper>1.5707960000000001</upper>
+          <effort>100</effort>
+          <velocity>100</velocity>
+        </limit>
+        <dynamics>
+          <damping>0.10000000000000001</damping>
+          <friction>0.10000000000000001</friction>
+          <spring_reference>0</spring_reference>
+          <spring_stiffness>0</spring_stiffness>
+        </dynamics>
+      </axis>
+    </joint>
+    <link name='robotic_arm_link_2_1'>
+      <pose relative_to='arm_joint_2'>0 0 0 0 0 0</pose>
+      <inertial>
+        <pose>-3.2131575150584617e-08 0.020776695494793131 -0.065628782157382548 0 0 0</pose>
+        <mass>0.074155555862577147</mass>
+        <inertia>
+          <ixx>0.00014100000000000001</ixx>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyy>0.000117</iyy>
+          <iyz>-2.3e-05</iyz>
+          <izz>6.0999999999999999e-05</izz>
+        </inertia>
+      </inertial>
+      <collision name='robotic_arm_link_2_1_collision'>
+        <pose>0.025069000000000001 0.026513999999999999 -0.66381699999999999 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/robotic_arm_link_2_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode/>
+          </friction>
+        </surface>
+      </collision>
+      <visual name='robotic_arm_link_2_1_visual'>
+        <pose>0.025069000000000001 0.026513999999999999 -0.66381699999999999 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/robotic_arm_link_2_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.850000024 0.850000024 0.850000024 1</ambient>
+          <diffuse>0.850000024 0.850000024 0.850000024 1</diffuse>
+        </material>
+      </visual>
+    </link>
+    <joint name='arm_joint_3' type='revolute'>
+      <pose relative_to='robotic_arm_link_2_1'>0 0 -0.155 0 0 0</pose>
+      <parent>robotic_arm_link_2_1</parent>
+      <child>robotic_arm_rotor_3_1</child>
+      <axis>
+        <xyz>0 -1 0</xyz>
+        <limit>
+          <lower>-0.78539800000000004</lower>
+          <upper>3.1415929999999999</upper>
+          <effort>100</effort>
+          <velocity>100</velocity>
+        </limit>
+        <dynamics>
+          <damping>0.10000000000000001</damping>
+          <friction>0.10000000000000001</friction>
+          <spring_reference>0</spring_reference>
+          <spring_stiffness>0</spring_stiffness>
+        </dynamics>
+      </axis>
+    </joint>
+    <link name='robotic_arm_rotor_3_1'>
+      <pose relative_to='arm_joint_3'>0 0 0 0 0 0</pose>
+      <inertial>
+        <pose>0.01117618146159967 0.034207335474662037 -0.02425661596150127 0 0 0</pose>
+        <mass>0.11217141528861251</mass>
+        <inertia>
+          <ixx>0.00010019609644041821</ixx>
+          <ixy>-8.8121403431846746e-06</ixy>
+          <ixz>2.915254336374352e-05</ixz>
+          <iyy>0.00010507414591472739</iyy>
+          <iyz>1.0223152610393141e-05</iyz>
+          <izz>4.9282174480546507e-05</izz>
+        </inertia>
+      </inertial>
+      <collision name='robotic_arm_rotor_3_1_collision'>
+        <pose>0.025069000000000001 0.026513999999999999 -0.50881699999999996 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/robotic_arm_rotor_3_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode/>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='robotic_arm_rotor_3_1_fixed_joint_lump__robotic_arm_link_3_1_collision_1'>
+        <pose>0.025069000000000001 0.026513999999999999 -0.50881699999999996 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/robotic_arm_link_3_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode/>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='robotic_arm_rotor_3_1_fixed_joint_lump__robotic_arm_rotor_4_1_collision_2'>
+        <pose>0.025069000000000001 0.026513999999999999 -0.50881699999999996 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/robotic_arm_rotor_4_1.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <visual name='robotic_arm_rotor_3_1_visual'>
+        <pose>0.025069000000000001 0.026513999999999999 -0.50881699999999996 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/robotic_arm_rotor_3_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.0799999982 0.0799999982 0.0799999982 1</ambient>
+          <diffuse>0.0799999982 0.0799999982 0.0799999982 1</diffuse>
+        </material>
+      </visual>
+      <visual name='robotic_arm_rotor_3_1_fixed_joint_lump__robotic_arm_link_3_1_visual_1'>
+        <pose>0.025069000000000001 0.026513999999999999 -0.50881699999999996 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/robotic_arm_link_3_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.949999988 0.949999988 0.949999988 1</ambient>
+          <diffuse>0.949999988 0.949999988 0.949999988 1</diffuse>
+        </material>
+      </visual>
+      <visual name='robotic_arm_rotor_3_1_fixed_joint_lump__robotic_arm_rotor_4_1_visual_2'>
+        <pose>0.025069000000000001 0.026513999999999999 -0.50881699999999996 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/robotic_arm_rotor_4_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <diffuse>0.990196109 1 1 1</diffuse>
+          <ambient>0.990196109 1 1 1</ambient>
+        </material>
+      </visual>
+    </link>
+    <joint name='arm_joint_4' type='revolute'>
+      <pose relative_to='robotic_arm_rotor_3_1'>0.029850000000000002 0.045449999999999997 -0.092302999999999996 0 0 0</pose>
+      <parent>robotic_arm_rotor_3_1</parent>
+      <child>robotic_arm_link_4_1</child>
+      <axis>
+        <xyz>0 0 -1</xyz>
+        <limit>
+          <lower>-3.1415929999999999</lower>
+          <upper>3.1415929999999999</upper>
+          <effort>100</effort>
+          <velocity>100</velocity>
+        </limit>
+        <dynamics>
+          <damping>0.10000000000000001</damping>
+          <friction>0.10000000000000001</friction>
+          <spring_reference>0</spring_reference>
+          <spring_stiffness>0</spring_stiffness>
+        </dynamics>
+      </axis>
+    </joint>
+    <link name='robotic_arm_link_4_1'>
+      <pose relative_to='arm_joint_4'>0 0 0 0 0 0</pose>
+      <inertial>
+        <pose>9.8926213142519199e-05 -0.0095630906449272902 -0.03234538152667437 0 0 0</pose>
+        <mass>0.02980846482445583</mass>
+        <inertia>
+          <ixx>1.126377350264075e-05</ixx>
+          <ixy>5.3293259085433298e-08</ixy>
+          <ixz>5.171444375102727e-08</ixz>
+          <iyy>8.5538102170830654e-06</iyy>
+          <iyz>-3.6306971008387599e-06</iyz>
+          <izz>6.7120585714409597e-06</izz>
+        </inertia>
+      </inertial>
+      <collision name='robotic_arm_link_4_1_collision'>
+        <pose>-0.0047809999999999997 -0.018936000000000001 -0.416514 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/robotic_arm_link_4_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode/>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='robotic_arm_link_4_1_fixed_joint_lump__robotic_arm_rotor_5_1_collision_1'>
+        <pose>-0.0047809999999999988 -0.018936000000000001 -0.416514 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/robotic_arm_rotor_5_1.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <visual name='robotic_arm_link_4_1_visual'>
+        <pose>-0.0047809999999999997 -0.018936000000000001 -0.416514 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/robotic_arm_link_4_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.699999988 0.699999988 0.699999988 1</ambient>
+          <diffuse>0.699999988 0.699999988 0.699999988 1</diffuse>
+        </material>
+      </visual>
+      <visual name='robotic_arm_link_4_1_fixed_joint_lump__robotic_arm_rotor_5_1_visual_1'>
+        <pose>-0.0047809999999999988 -0.018936000000000001 -0.416514 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/robotic_arm_rotor_5_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <diffuse>0.990196109 1 1 1</diffuse>
+          <ambient>0.990196109 1 1 1</ambient>
+        </material>
+      </visual>
+    </link>
+    <joint name='arm_joint_5' type='revolute'>
+      <pose relative_to='robotic_arm_link_4_1'>0.0052499999999999986 -0.0378 -0.042500000000000003 0 0 0</pose>
+      <parent>robotic_arm_link_4_1</parent>
+      <child>robotic_arm_link_5_1</child>
+      <axis>
+        <xyz>0 -1 0</xyz>
+        <limit>
+          <lower>-2.3561939999999999</lower>
+          <upper>2.3561939999999999</upper>
+          <effort>100</effort>
+          <velocity>100</velocity>
+        </limit>
+        <dynamics>
+          <damping>0.10000000000000001</damping>
+          <friction>0.10000000000000001</friction>
+          <spring_reference>0</spring_reference>
+          <spring_stiffness>0</spring_stiffness>
+        </dynamics>
+      </axis>
+    </joint>
+    <link name='robotic_arm_link_5_1'>
+      <pose relative_to='arm_joint_5'>0 0 0 0 0 0</pose>
+      <inertial>
+        <pose>4.7154795833716421e-05 -0.0073759228628415396 -0.049555878890669668 0 0 0</pose>
+        <mass>0.044823259399740627</mass>
+        <inertia>
+          <ixx>5.4376424499608963e-05</ixx>
+          <ixy>-6.0360129624265225e-08</ixy>
+          <ixz>1.2689031585974569e-07</ixz>
+          <iyy>5.154038019510703e-05</iyy>
+          <iyz>5.9646905438994761e-06</iyz>
+          <izz>8.8386124564813034e-06</izz>
+        </inertia>
+      </inertial>
+      <collision name='robotic_arm_link_5_1_collision'>
+        <pose>-0.010031 0.018863999999999999 -0.37401400000000001 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/robotic_arm_link_5_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode/>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='robotic_arm_link_5_1_fixed_joint_lump__robotic_arm_rotor_6_1_collision_1'>
+        <pose>-0.010031 0.018863999999999999 -0.37401400000000001 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/robotic_arm_rotor_6_1.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <visual name='robotic_arm_link_5_1_visual'>
+        <pose>-0.010031 0.018863999999999999 -0.37401400000000001 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/robotic_arm_link_5_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.699999988 0.699999988 0.699999988 1</ambient>
+          <diffuse>0.699999988 0.699999988 0.699999988 1</diffuse>
+        </material>
+      </visual>
+      <visual name='robotic_arm_link_5_1_fixed_joint_lump__robotic_arm_rotor_6_1_visual_1'>
+        <pose>-0.010031 0.018863999999999999 -0.37401400000000001 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/robotic_arm_rotor_6_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <diffuse>0.990196109 1 1 1</diffuse>
+          <ambient>0.990196109 1 1 1</ambient>
+        </material>
+      </visual>
+    </link>
+    <joint name='arm_joint_6' type='revolute'>
+      <pose relative_to='robotic_arm_link_5_1'>0.0052499999999999986 0.022499999999999999 -0.074999999999999997 0 0 0</pose>
+      <parent>robotic_arm_link_5_1</parent>
+      <child>robotic_arm_link_6_1</child>
+      <axis>
+        <xyz>0 1 0</xyz>
+        <limit>
+          <lower>0</lower>
+          <upper>3.1415929999999999</upper>
+          <effort>100</effort>
+          <velocity>100</velocity>
+        </limit>
+        <dynamics>
+          <damping>0.10000000000000001</damping>
+          <friction>0.10000000000000001</friction>
+          <spring_reference>0</spring_reference>
+          <spring_stiffness>0</spring_stiffness>
+        </dynamics>
+      </axis>
+    </joint>
+    <link name='robotic_arm_link_6_1'>
+      <pose relative_to='arm_joint_6'>0 0 0 0 0 0</pose>
+      <inertial>
+        <pose>0.0180407568548797 0.01121797601986379 -6.2943786420453422e-06 0 0 0</pose>
+        <mass>0.01489674816065127</mass>
+        <inertia>
+          <ixx>1.020265995074097e-06</ixx>
+          <ixy>-2.773458595030608e-07</ixy>
+          <ixz>-1.7521739372748929e-09</ixz>
+          <iyy>5.8416186005552418e-06</iyy>
+          <iyz>-1.2802834417709409e-10</iyz>
+          <izz>5.8618829779529232e-06</izz>
+        </inertia>
+      </inertial>
+      <collision name='robotic_arm_link_6_1_collision'>
+        <pose>-0.015280999999999999 -0.0036359999999999999 -0.299014 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/robotic_arm_link_6_1.stl</uri>
+          </mesh>
+        </geometry>
+        <surface>
+          <contact>
+            <ode/>
+          </contact>
+          <friction>
+            <ode/>
+          </friction>
+        </surface>
+      </collision>
+      <collision name='robotic_arm_link_6_1_fixed_joint_lump__pen_1_collision_1'>
+        <pose>-0.015280999999999999 -0.0036359999999999999 -0.299014 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/pen_1.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <collision name='robotic_arm_link_6_1_fixed_joint_lump__point_pen_1_1_collision_2'>
+        <pose>-0.015280999999999999 -0.0036359999999999999 -0.299014 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/point_pen_1_1.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <visual name='robotic_arm_link_6_1_visual'>
+        <pose>-0.015280999999999999 -0.0036359999999999999 -0.299014 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/robotic_arm_link_6_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.850000024 0.850000024 0.850000024 1</ambient>
+          <diffuse>0.850000024 0.850000024 0.850000024 1</diffuse>
+        </material>
+      </visual>
+      <visual name='robotic_arm_link_6_1_fixed_joint_lump__pen_1_visual_1'>
+        <pose>-0.015280999999999999 -0.0036359999999999999 -0.299014 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/pen_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <diffuse>1 1 1 1</diffuse>
+          <ambient>1 1 1 1</ambient>
+        </material>
+      </visual>
+      <visual name='robotic_arm_link_6_1_fixed_joint_lump__point_pen_1_1_visual_2'>
+        <pose>-0.015280999999999999 -0.0036359999999999999 -0.299014 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>0.001 0.001 0.001</scale>
+            <uri>model://hop_description/meshes/point_pen_1_1.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <diffuse>1 1 1 1</diffuse>
+          <ambient>1 1 1 1</ambient>
+        </material>
+      </visual>
+    </link>
+    <plugin name='gz::sim::systems::JointStatePublisher' filename='gz-sim-joint-state-publisher-system'>
+      <joint_name>arm_joint_1</joint_name>
+      <joint_name>arm_joint_2</joint_name>
+      <joint_name>arm_joint_3</joint_name>
+      <joint_name>arm_joint_4</joint_name>
+      <joint_name>arm_joint_5</joint_name>
+      <joint_name>arm_joint_6</joint_name>
+      <joint_name>rotor_joint_1</joint_name>
+      <joint_name>rotor_joint_2</joint_name>
+      <joint_name>rotor_joint_3</joint_name>
+      <joint_name>rotor_joint_4</joint_name>
+    </plugin>
+    <plugin name='gz::sim::systems::JointPositionController' filename='gz-sim-joint-position-controller-system'>
+      <joint_name>arm_joint_1</joint_name>
+      <p_gain>1.0</p_gain>
+      <i_gain>0.0</i_gain>
+      <d_gain>0.1</d_gain>
+    </plugin>
+    <plugin name='gz::sim::systems::JointPositionController' filename='gz-sim-joint-position-controller-system'>
+      <joint_name>arm_joint_2</joint_name>
+      <p_gain>1.0</p_gain>
+      <i_gain>0.0</i_gain>
+      <d_gain>0.1</d_gain>
+    </plugin>
+    <plugin name='gz::sim::systems::JointPositionController' filename='gz-sim-joint-position-controller-system'>
+      <joint_name>arm_joint_3</joint_name>
+      <p_gain>1.0</p_gain>
+      <i_gain>0.0</i_gain>
+      <d_gain>0.1</d_gain>
+    </plugin>
+    <plugin name='gz::sim::systems::JointPositionController' filename='gz-sim-joint-position-controller-system'>
+      <joint_name>arm_joint_4</joint_name>
+      <p_gain>0.5</p_gain>
+      <i_gain>0.0</i_gain>
+      <d_gain>0.05</d_gain>
+    </plugin>
+    <plugin name='gz::sim::systems::JointPositionController' filename='gz-sim-joint-position-controller-system'>
+      <joint_name>arm_joint_5</joint_name>
+      <p_gain>0.5</p_gain>
+      <i_gain>0.0</i_gain>
+      <d_gain>0.05</d_gain>
+    </plugin>
+    <plugin name='gz::sim::systems::JointPositionController' filename='gz-sim-joint-position-controller-system'>
+      <joint_name>arm_joint_6</joint_name>
+      <p_gain>0.5</p_gain>
+      <i_gain>0.0</i_gain>
+      <d_gain>0.05</d_gain>
+    </plugin>
+    <frame name='rigid_9' attached_to='frame_arm_3_1'>
+      <pose>0.112384 0.12686900000000001 0.03705 0 0 0</pose>
+    </frame>
+    <frame name='motor_3_1' attached_to='rigid_9'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='rigid_1' attached_to='base_link'>
+      <pose>0.046528 0.031724000000000002 0.75049299999999997 0 0 0</pose>
+    </frame>
+    <frame name='frame_arm_3_1' attached_to='rigid_1'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='rigid_10' attached_to='frame_arm_4_1'>
+      <pose>-0.12686900000000001 0.112384 0.03705 0 0 0</pose>
+    </frame>
+    <frame name='motor_4_1' attached_to='rigid_10'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='rigid_2' attached_to='base_link'>
+      <pose>-0.032031999999999998 0.046219999999999997 0.75049299999999997 0 0 0</pose>
+    </frame>
+    <frame name='frame_arm_4_1' attached_to='rigid_2'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='rigid_11' attached_to='frame_arm_1_1'>
+      <pose>-0.112384 -0.12686900000000001 0.03705 0 0 0</pose>
+    </frame>
+    <frame name='motor_1_1' attached_to='rigid_11'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='rigid_39' attached_to='payload_bracket_1_1'>
+      <pose>0 0 0.050000000000000003 0 0 0</pose>
+    </frame>
+    <frame name='camera_1_1' attached_to='rigid_39'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='rigid_17' attached_to='frame_mount_1'>
+      <pose>0.031466000000000001 0.048083000000000001 0.0016509999999999999 0 0 0</pose>
+    </frame>
+    <frame name='payload_bracket_1_1' attached_to='rigid_17'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='rigid_7' attached_to='frame_arm_1_1'>
+      <pose>0.015062000000000001 -0.016050999999999999 0.036804999999999997 0 0 0</pose>
+    </frame>
+    <frame name='frame_mount_1' attached_to='rigid_7'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='rigid_3' attached_to='base_link'>
+      <pose>-0.046528 -0.032340000000000001 0.75049299999999997 0 0 0</pose>
+    </frame>
+    <frame name='frame_arm_1_1' attached_to='rigid_3'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='rigid_8' attached_to='frame_arm_2_1'>
+      <pose>0.112373 -0.12687999999999999 0.03705 0 0 0</pose>
+    </frame>
+    <frame name='motor_2_1' attached_to='rigid_8'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='rigid_4' attached_to='base_link'>
+      <pose>0.046528 -0.032340000000000001 0.75049299999999997 0 0 0</pose>
+    </frame>
+    <frame name='frame_arm_2_1' attached_to='rigid_4'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='rigid_5' attached_to='base_link'>
+      <pose>-0.046528 -0.032340000000000001 0.74889099999999997 0 0 0</pose>
+    </frame>
+    <frame name='landing_gear_1_1' attached_to='rigid_5'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='rigid_38' attached_to='robotic_arm_rotor_1_1'>
+      <pose>-0.023937 -0.0038999999999999998 0.029999999999999999 0 0 0</pose>
+    </frame>
+    <frame name='payload_bracket_2_1' attached_to='rigid_38'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='rigid_19' attached_to='arm_mount_bracket_1_1'>
+      <pose>0.16339000000000001 -0.028138 -0.0062500000000000003 0 0 0</pose>
+    </frame>
+    <frame name='robotic_arm_rotor_1_1' attached_to='rigid_19'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='rigid_21' attached_to='robotic_arm_link_1_1'>
+      <pose>-0.048931000000000002 -0.0070000000000000001 -0.033723999999999997 0 0 0</pose>
+    </frame>
+    <frame name='robotic_arm_rotor_2_1' attached_to='rigid_21'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='rigid_25' attached_to='robotic_arm_link_3_1'>
+      <pose>0.033750000000000002 0.036200000000000003 -0.042816 0 0 0</pose>
+    </frame>
+    <frame name='robotic_arm_rotor_4_1' attached_to='rigid_25'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='rigid_27' attached_to='robotic_arm_link_4_1'>
+      <pose>0.0152 -0.023 -0.042500000000000003 0 0 0</pose>
+    </frame>
+    <frame name='robotic_arm_rotor_5_1' attached_to='rigid_27'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='rigid_29' attached_to='robotic_arm_link_5_1'>
+      <pose>-0.0152 0.0074999999999999997 -0.074999999999999997 0 0 0</pose>
+    </frame>
+    <frame name='robotic_arm_rotor_6_1' attached_to='rigid_29'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='rigid_33' attached_to='pen_1'>
+      <pose>0.044999999999999998 0 0 0 0 0</pose>
+    </frame>
+    <frame name='point_pen_1_1' attached_to='rigid_33'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='rigid_32' attached_to='robotic_arm_link_6_1'>
+      <pose>0.01 0.01225 0 0 0 0</pose>
+    </frame>
+    <frame name='pen_1' attached_to='rigid_32'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='rigid_24' attached_to='robotic_arm_rotor_3_1'>
+      <pose>-0.0038999999999999998 0.019199999999999998 -0.034687000000000003 0 0 0</pose>
+    </frame>
+    <frame name='robotic_arm_link_3_1' attached_to='rigid_24'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='rigid_18' attached_to='landing_gear_2_1'>
+      <pose>-0.092999999999999999 0 -0.025000000000000001 0 0 0</pose>
+    </frame>
+    <frame name='arm_mount_bracket_1_1' attached_to='rigid_18'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='rigid_6' attached_to='base_link'>
+      <pose>-0.046528 0.031724000000000002 0.74889099999999997 0 0 0</pose>
+    </frame>
+    <frame name='landing_gear_2_1' attached_to='rigid_6'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+  </model>
+</sdf>
