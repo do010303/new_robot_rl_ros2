@@ -2177,7 +2177,7 @@ def _run_pid_real_replay(mode='reaching', replay_artifact_path=None, replay_gain
         total_segments_acked = 0
         pi_joint_names = list(base_env.motion_backend.mapper.pi_joint_names)
         pi_joint_meta = {}
-        for _, (gz_name, pi_name, home_deg, inverted) in enumerate(base_env.motion_backend.mapper.gazebo_lookup.items()):
+        for gz_name, (_, pi_name, home_deg, inverted) in base_env.motion_backend.mapper.gazebo_lookup.items():
             pi_joint_meta[pi_name] = (home_deg, inverted)
 
         for ep in range(episodes):
