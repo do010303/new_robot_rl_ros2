@@ -839,11 +839,11 @@
 </joint>
 
 <joint name="Revolute 26" type="revolute">
-  <origin xyz="0.0 -0.00995 -0.0148" rpy="0 0 0"/>
+  <origin xyz="0.0 -0.00995 -0.0148" rpy="0 0 -1.570796"/>
   <parent link="old_component__21__1"/>
   <child link="old_component__22__1"/>
   <axis xyz="0.0 0.0 1.0"/>
-  <limit upper="3.1415" lower="-3.1415" effort="100" velocity="100"/>
+  <limit upper="1.5708" lower="-1.5708" effort="100" velocity="100"/>
 </joint>
 
 <joint name="Rigid 27" type="fixed">

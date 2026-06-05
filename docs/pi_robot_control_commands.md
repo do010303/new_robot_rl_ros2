@@ -2,6 +2,25 @@
 
 This is the tracked (non-`ref/`) copy of the Pi command cheatsheet.
 
+## Fixing offset
+ssh piros2@192.168.50.1 password: 1
+
+Step 1: Launch // Khởi tạo
+  cd ~/ros2_ws
+  source /opt/ros/humble/setup.bash
+  source install/setup.bash
+  ros2 launch wicom_roboarm wicom_roboarm.launch.py
+
+Step 2: Select the right pin
+  Current pin map: watch the terminal of step 1 to verify // nhìn terminal của wicom_roboarm.launch để kiểm tra đầu pin cắm
+      joint_names: ["base", "shoulder", "elbow", "wrist_roll", "wrist_pitch", "pen"]
+      channels:    [0, 1, 4, 7, 8, 15]
+
+Step 3: Base on the plugged pin, command:
+    ros2 topic pub -r 10 -t 2 /pca9685_servo/command sensor_msgs/msg/JointState "{name:['base'], position:[90.0]}"
+    Switch base with other joint from the map in step 2 // đổi tên base với các góc khác theo map ở bước 2
+
+//finished - xong
 ## Launch (Pi)
 
 ```bash

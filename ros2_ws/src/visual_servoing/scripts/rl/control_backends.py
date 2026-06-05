@@ -37,8 +37,9 @@ GAZEBO_TO_PI_JOINT_MAP = [
     ("Revolute 20", "base", 90.0, False),
     ("Revolute 22", "shoulder", 90.0, False),
     ("Revolute 23", "elbow", 90.0, False),
-    # The physical wrist_roll servo is neutral at 90deg and rotates opposite Gazebo.
-    ("Revolute 26", "wrist_roll", 90.0, True),
+    # Gazebo q4=0 corresponds to the physical servo's 90deg neutral because
+    # the URDF already bakes in the -90deg wrist mount orientation.
+    ("Revolute 26", "wrist_roll", 90.0, False),
     ("Revolute 28", "wrist_pitch", 90.0, False),
     ("Revolute 30", "pen", 90.0, False),
 ]
@@ -451,7 +452,8 @@ class SimToRealShadowBackend(GazeboBackend):
             self.node.get_logger().warn(
                 "Pi home service failed or not ready; falling back to joint trajectory home move"
             )
-            self._publish_real_robot_command(np.zeros(len(self.mapper.gazebo_joint_names)), duration)
+            home_joints = np.zeros(len(self.mapper.gazebo_joint_names))
+            self._publish_real_robot_command(home_joints, duration)
             time.sleep(duration + 0.2)
             ok_pi = True
         return ok_pi
@@ -667,14 +669,16 @@ class RealReplayBackend(MotionBackendBase):
         return False
 
     def home(self, duration: float = 2.0) -> bool:
+        home_joints = np.zeros(len(self.mapper.gazebo_joint_names))
+            
         if not self.home_client.service_is_ready():
-            return self.move_to_joint_positions(np.zeros(len(self.mapper.gazebo_joint_names)), duration=duration)
+            return self.move_to_joint_positions(home_joints, duration=duration)
         future = self.home_client.call_async(Trigger.Request())
         rclpy.spin_until_future_complete(self.node, future, timeout_sec=5.0)
         resp = future.result()
         if resp is None or not resp.success:
             self.node.get_logger().warn("Pi home service failed; falling back to joint trajectory home move")
-            return self.move_to_joint_positions(np.zeros(len(self.mapper.gazebo_joint_names)), duration=duration)
+            return self.move_to_joint_positions(home_joints, duration=duration)
         time.sleep(0.5)
         return True
 

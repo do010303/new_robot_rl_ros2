@@ -130,9 +130,9 @@ def fk_batch_torch(joints, device):
     # Fixed: → old_component__21__1
     pos = apply_translation(pos, R, 0.03375, 0.0362, -0.042816)
     
-    # Rev 26: axis=(0,0,-1) → Rz(-q[3])
+    # Rev 26: axis=(0,0,1) → Rz(q[3] - 1.570796) due to -90deg mount orientation
     pos = apply_translation(pos, R, 0.0, -0.00995, -0.0148)
-    R = torch.bmm(R, make_Rz(-joints[:, 3]))
+    R = torch.bmm(R, make_Rz(joints[:, 3] - 1.570796))
     
     # Fixed: → old_component__23__1
     pos = apply_translation(pos, R, 0.0152, -0.023, -0.0425)

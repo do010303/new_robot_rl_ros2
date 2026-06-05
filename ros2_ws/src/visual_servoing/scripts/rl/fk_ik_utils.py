@@ -83,7 +83,7 @@ def fk(q, raw=False) -> Tuple[float,float,float]:
         q_int = list(q)
     else:
         # Map input from positive agent space [0, pi] down to internal URDF space
-        offsets = [1.570796, 1.570796, 1.570796, 3.141592, 1.570796, 1.570796]
+        offsets = [1.570796, 1.570796, 1.570796, 0.0, 1.570796, 1.570796]
         q_int = [q[i] - offsets[i] for i in range(6)]
 
     # Fixed: base_link → old_component__6__1
@@ -110,8 +110,8 @@ def fk(q, raw=False) -> Tuple[float,float,float]:
     # Fixed: → old_component__21__1
     T_r25 = _T(0.03375, 0.0362, -0.042816)
 
-    # Rev 26: axis=(0, 0, 1) → rotation = Rz(q[3])
-    T_j26 = _chain(_T(0.0, -0.00995, -0.0148), _Rz(q_int[3]))
+    # Rev 26: axis=(0, 0, 1) → rotation = Rz(q[3] - 1.570796) due to -90deg mount orientation
+    T_j26 = _chain(_T(0.0, -0.00995, -0.0148), _Rz(q_int[3] - 1.570796))
 
     # Fixed: → old_component__23__1
     T_r27 = _T(0.0152, -0.023, -0.0425)
@@ -149,7 +149,7 @@ def fk_with_orientation(q, raw=False) -> Tuple[Tuple[float,float,float], Tuple[f
     if raw:
         q_int = list(q)
     else:
-        offsets = [1.570796, 1.570796, 1.570796, 3.141592, 1.570796, 1.570796]
+        offsets = [1.570796, 1.570796, 1.570796, 0.0, 1.570796, 1.570796]
         q_int = [q[i] - offsets[i] for i in range(6)]
 
     T_r6  = _T(-0.046528, 0.031724, 0.748891)
@@ -161,7 +161,8 @@ def fk_with_orientation(q, raw=False) -> Tuple[Tuple[float,float,float], Tuple[f
     T_j23 = _chain(_T(0.0, 0.0, -0.155), _Ry(q_int[2]))
     T_r24 = _T(-0.0039, 0.0192, -0.034687)
     T_r25 = _T(0.03375, 0.0362, -0.042816)
-    T_j26 = _chain(_T(0.0, -0.00995, -0.0148), _Rz(q_int[3]))
+    # Rev 26: axis=(0, 0, 1) → rotation = Rz(q[3] - 1.570796) due to -90deg mount orientation
+    T_j26 = _chain(_T(0.0, -0.00995, -0.0148), _Rz(q_int[3] - 1.570796))
     T_r27 = _T(0.0152, -0.023, -0.0425)
     T_j28 = _chain(_T(-0.00995, -0.0148, 0.0), _Ry(-q_int[4]))
     T_r29 = _T(-0.0152, 0.0075, -0.075)

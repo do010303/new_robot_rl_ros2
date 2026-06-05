@@ -64,7 +64,8 @@ DRAWING_BOUNDARY_INTEGRAL_DECAY = 0.15
 
 # IK weights: position-first approach
 # Position accuracy is paramount; orientation and posture are secondary refinements.
-IK_ORIENT_WEIGHT = 0.01     # Pen direction penalty (low — position dominates)
+IK_ORIENT_WEIGHT = 0.01     # Reaching/default orientation penalty
+IK_DRAWING_ORIENT_WEIGHT = 0.0005  # Drawing should prioritize Cartesian path geometry
 IK_J4_REG_WEIGHT = 0.001    # Keep wrist roll near zero to prevent swinging
 IK_CONTINUITY_WEIGHT = 1e-4  # Tiny penalty to keep joints close to seed (prevents branch jumps)
 IK_ORIENTATION_TARGET = np.array([-1.0, 0.0, 0.0], dtype=np.float64)
@@ -84,9 +85,18 @@ REWARD_EFFORT_W = 0.005
 REWARD_SMOOTH_DELTA_W = 0.20
 REWARD_SMOOTH_JERK_W = 0.10
 
-# Joint limits (from URDF xacro — raw Gazebo angles)
-JOINT_LIMITS_LOW = np.array([-1.5708, -1.0472, -1.5708, -3.1415, -1.5708, -1.5708])
-JOINT_LIMITS_HIGH = np.array([1.5708, 1.5708, 1.5708, 3.1415, 1.5708, 1.5708])
+# Default joint limits fallback (raw Gazebo angles). The active PID tuning
+# session should inherit the live limits from base_env so it stays aligned with
+# the currently loaded robot description.
+DEFAULT_JOINT_LIMITS_LOW = np.array([-1.5708, -1.0472, -1.5708, -1.5708, -1.5708, -1.5708])
+DEFAULT_JOINT_LIMITS_HIGH = np.array([1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708])
+
+# Joint 4 convention:
+# - software-facing mapped space: 90deg lock
+# - Gazebo raw space: 0 rad lock
+# - physical servo space: 90deg lock
+J4_LOCK_RAW_RAD = 0.0
+J4_LOCK_MAPPED_DEG = 90.0
 
 # Target sampling: how much of the joint range to sample from
 TARGET_RANGE_FRACTION = 0.7
@@ -142,6 +152,23 @@ class PIDTuningEnv:
         self.mode = mode
         self.shape_joint_waypoints = []
         self.shape_xyz_waypoints = []
+
+        # Inherit the live raw Gazebo joint limits and mapped 0-180 offsets from
+        # the base environment so PID tuning matches option 1's convention.
+        self.joint_limits_low = np.asarray(
+            getattr(base_env, 'gazebo_limits_low', DEFAULT_JOINT_LIMITS_LOW),
+            dtype=np.float64,
+        ).copy()
+        self.joint_limits_high = np.asarray(
+            getattr(base_env, 'gazebo_limits_high', DEFAULT_JOINT_LIMITS_HIGH),
+            dtype=np.float64,
+        ).copy()
+        self.joint_offsets = np.asarray(
+            getattr(base_env, 'joint_offsets', np.full(n_joints, np.pi / 2.0)),
+            dtype=np.float64,
+        ).copy()
+        self.j4_lock_raw = J4_LOCK_RAW_RAD
+        self.j4_lock_mapped_deg = J4_LOCK_MAPPED_DEG
         
         # RL spaces
         self.state_dim = 24  # 6 pos + 6 vel + 6 target + 6 error
@@ -151,13 +178,13 @@ class PIDTuningEnv:
         obs_low = np.concatenate([
             np.full(n_joints, -np.pi),      # joint positions min
             np.full(n_joints, -10.0),        # joint velocities min
-            JOINT_LIMITS_LOW,                # target joints min
+            self.joint_limits_low,           # target joints min
             np.full(n_joints, -2 * np.pi),   # tracking error min
         ])
         obs_high = np.concatenate([
             np.full(n_joints, np.pi),        # joint positions max
             np.full(n_joints, 10.0),         # joint velocities max
-            JOINT_LIMITS_HIGH,               # target joints max
+            self.joint_limits_high,          # target joints max
             np.full(n_joints, 2 * np.pi),    # tracking error max
         ])
         self.observation_space = spaces.Box(low=obs_low, high=obs_high, dtype=np.float32)
@@ -184,7 +211,15 @@ class PIDTuningEnv:
         self._log("PID Tuning Environment initialized")
         self._log(f"  State dim: {self.state_dim}, Action dim: {self.action_dim}")
         self._log(f"  Target gen: joint-space random → FK for visualization")
-        self._log(f"  IK: position-first (orient_w={IK_ORIENT_WEIGHT}, j4_reg={IK_J4_REG_WEIGHT})")
+        self._log(
+            f"  IK: position-first "
+            f"(reach_orient_w={IK_ORIENT_WEIGHT}, draw_orient_w={IK_DRAWING_ORIENT_WEIGHT}, "
+            f"j4_reg={IK_J4_REG_WEIGHT})"
+        )
+        self._log(
+            f"  Joint 4 lock: mapped={self.j4_lock_mapped_deg:.0f}deg "
+            f"/ gazebo_raw={self.j4_lock_raw:.2f}rad / physical≈90deg"
+        )
         self._log(f"  Trajectory: {TRAJECTORY_STEPS} steps, {TRAJECTORY_DURATION}s")
         self._log(f"  PID gain ranges: Kp=[0, {self.pid.GAIN_RANGES['Kp'][1]}], "
                   f"Ki=[0, {self.pid.GAIN_RANGES['Ki'][1]}], "
@@ -207,7 +242,8 @@ class PIDTuningEnv:
         return q, qd
 
     def _solve_ik_waypoint(self, target_xyz: np.ndarray, q_seed: np.ndarray,
-                           log_context: str = '') -> Tuple[np.ndarray, float]:
+                           log_context: str = '',
+                           orient_weight: float = IK_ORIENT_WEIGHT) -> Tuple[np.ndarray, float]:
         """
         Position-first IK solver.
 
@@ -227,14 +263,15 @@ class PIDTuningEnv:
             pos, v_pen = fk_with_orientation(list(q), raw=True)
             pos_loss = np.sum((np.asarray(pos, dtype=np.float64) - target_xyz) ** 2)
             orient_loss = np.sum((np.asarray(v_pen, dtype=np.float64) - IK_ORIENTATION_TARGET) ** 2)
-            j4_reg = q[3] ** 2
+            j4_reg = (q[3] - self.j4_lock_raw) ** 2
             continuity = np.sum((q - q_seed) ** 2)  # Prefer solutions near seed
             return (pos_loss
-                    + IK_ORIENT_WEIGHT * orient_loss
+                    + orient_weight * orient_loss
                     + IK_J4_REG_WEIGHT * j4_reg
                     + IK_CONTINUITY_WEIGHT * continuity)
 
-        bounds = list(zip(JOINT_LIMITS_LOW, JOINT_LIMITS_HIGH))
+        bounds = list(zip(self.joint_limits_low, self.joint_limits_high))
+        bounds[3] = (self.j4_lock_raw, self.j4_lock_raw)
         res = minimize(ik_loss, q_seed, bounds=bounds, method='L-BFGS-B')
 
         q_solution = np.asarray(res.x, dtype=np.float64)
@@ -267,9 +304,9 @@ class PIDTuningEnv:
                 (0.2 * prev[2:])
             )
 
-        smoothed = np.clip(smoothed, JOINT_LIMITS_LOW, JOINT_LIMITS_HIGH)
+        smoothed = np.clip(smoothed, self.joint_limits_low, self.joint_limits_high)
         return [sample.copy() for sample in smoothed]
-    
+
     # =========================================================================
     # TARGET GENERATION (Joint-space + FK visualization)
     # =========================================================================
@@ -300,6 +337,7 @@ class PIDTuningEnv:
         q_start, _ = self._get_joint_state()
         q_goal, pos_err_mm = self._solve_ik_waypoint(
             target_xyz, q_start, log_context='reaching target',
+            orient_weight=IK_ORIENT_WEIGHT,
         )
         
         self._log(f"Target Board XYZ=[{target_xyz[0]:.3f}, {target_xyz[1]:.3f}, {target_xyz[2]:.3f}] "
@@ -363,7 +401,7 @@ class PIDTuningEnv:
             self.shape_joint_waypoints = []
             q_seed = self.home_position.copy()
             max_err = 0.0
-            
+
             for wp_idx, wp_xyz in enumerate(self.shape_xyz_waypoints):
                 target = np.array(wp_xyz)
                 q_solution, pos_err_mm = self._solve_ik_waypoint(
@@ -372,6 +410,7 @@ class PIDTuningEnv:
                         f"WP {wp_idx + 1}/{len(self.shape_xyz_waypoints)} "
                         f"[{target[0]:.3f},{target[1]:.3f},{target[2]:.3f}]"
                     ),
+                    orient_weight=IK_DRAWING_ORIENT_WEIGHT,
                 )
                 self.shape_joint_waypoints.append(q_solution.copy())
                 q_seed = q_solution.copy()
@@ -510,7 +549,7 @@ class PIDTuningEnv:
             q_command = self.pid.compute(q_desired, q_actual, dt=TRAJECTORY_DT)
             
             # Clip to joint limits
-            q_command = np.clip(q_command, JOINT_LIMITS_LOW, JOINT_LIMITS_HIGH)
+            q_command = np.clip(q_command, self.joint_limits_low, self.joint_limits_high)
             commanded_joint_trace.append(q_command.copy())
             
             # Send position command via ZERO-OVERHEAD Topic Publisher
@@ -546,7 +585,7 @@ class PIDTuningEnv:
                             hold_start = time.time()
                             q_hold, _ = self._get_joint_state()
                             q_cmd_hold = self.pid.compute(wp_q, q_hold, dt=TRAJECTORY_DT)
-                            q_cmd_hold = np.clip(q_cmd_hold, JOINT_LIMITS_LOW, JOINT_LIMITS_HIGH)
+                            q_cmd_hold = np.clip(q_cmd_hold, self.joint_limits_low, self.joint_limits_high)
                             commanded_joint_trace.append(q_cmd_hold.copy())
                             replay_joint_trace.append(wp_q.copy())
                             self.base_env._stream_joint_positions(q_cmd_hold, duration=TRAJECTORY_DT)

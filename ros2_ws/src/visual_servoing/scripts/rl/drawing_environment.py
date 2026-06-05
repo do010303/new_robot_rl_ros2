@@ -164,6 +164,17 @@ class DrawingEnvironment(RLEnvironment):
         self.get_logger().info(f"📊 State: 18D (6 joints + 12 other), -Y workspace")
         if self.use_dynamic_workspace:
             self.get_logger().info("⏳ Waiting for ArUco board detection...")
+            
+        # In the software-facing 0-180deg mapped space, Joint 4 is locked at
+        # 90deg. Internally this converts back to Gazebo raw 0 rad.
+        self.joint_limits_low[3] = self.joint_offsets[3]
+        self.joint_limits_high[3] = self.joint_offsets[3]
+        self.action_space = spaces.Box(
+            low=self.joint_limits_low,
+            high=self.joint_limits_high,
+            dtype=np.float32
+        )
+        
         self.get_logger().info("✅ Drawing Environment ready!")
 
     def _fallback_board_to_base(self, points_board: np.ndarray) -> np.ndarray:
@@ -377,8 +388,9 @@ class DrawingEnvironment(RLEnvironment):
         # Reset line visualization
         self._reset_line_visualization()
         
-        # Move to home
-        success = self._move_to_joint_positions(np.zeros(6), duration=2.0)
+        # Move to home with Joint 4 at Gazebo neutral (maps to Pi 90deg)
+        home_joints = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        success = self._move_to_joint_positions(home_joints, duration=2.0)
         if not success:
             self.get_logger().warn(
                 "⚠️ Drawing reset home move reported failure; continuing with episode reset"
@@ -444,7 +456,9 @@ class DrawingEnvironment(RLEnvironment):
         # 18D state: dist_3d is at index 15
         dist_before = state_before[15]
         
-        target_joints = np.clip(action, self.joint_limits_low, self.joint_limits_high)
+        target_joints_mapped = np.clip(action, self.joint_limits_low, self.joint_limits_high)
+        target_joints_mapped[3] = self.joint_offsets[3]  # Force lock Joint 4 at mapped 90deg
+        target_joints = target_joints_mapped - self.joint_offsets
         self._move_to_joint_positions(target_joints, duration=0.8)  # Faster movement
         time.sleep(0.1)  # Reduced delay for faster line drawing
         
@@ -467,7 +481,8 @@ class DrawingEnvironment(RLEnvironment):
         if self.robot_z <= 0.01:
             reward = -50.0
             done = True
-            self._move_to_joint_positions(np.zeros(6), duration=1.0)
+            home_joints = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+            self._move_to_joint_positions(home_joints, duration=1.0)
             time.sleep(0.5)
         
         if self.current_step >= self.max_episode_steps:

@@ -136,14 +136,17 @@ class RLEnvironment(Node):
         
         # Joint limits for Gazebo physics (from new_arm.xacro)
         self.gazebo_limits_low = np.array([
-            -3.1415, -3.1415, -3.1415, -3.1415, -3.1415, -3.1415
+            -3.1415, -3.1415, -3.1415, -1.5708, -3.1415, -3.1415
         ])
         self.gazebo_limits_high = np.array([
-            3.1415, 3.1415, 3.1415, 3.1415, 3.1415, 3.1415
+            3.1415, 3.1415, 3.1415, 1.5708, 3.1415, 3.1415
         ])
         
         # RL Agent bounds strictly in [0, 180°] mapped positive space
-        self.joint_offsets = np.array([1.570796, 1.570796, 1.570796, 3.141592, 1.570796, 1.570796])
+        # Joint 4's physical neutral is 90deg, but Gazebo raw neutral is 0 rad
+        # because the URDF already includes the wrist mount's -90deg orientation.
+        # So the positive 0-180deg agent space still needs a +90deg offset here.
+        self.joint_offsets = np.array([1.570796, 1.570796, 1.570796, 1.570796, 1.570796, 1.570796])
         self.joint_limits_low = self.gazebo_limits_low + self.joint_offsets
         self.joint_limits_high = self.gazebo_limits_high + self.joint_offsets
         

@@ -33,16 +33,13 @@ ACTIVE_JOINTS = [
     # (pi_name, gazebo_name, pi_home_deg, pi_inverted)
     ("base",        "Revolute 20", 90.0,  False),
     ("shoulder",    "Revolute 22",  90.0, False),
-    ("elbow",       "Revolute 23",  90.0,   True),
-    ("wrist_roll",  "Revolute 26", 90.0,   True),   # J4
+    ("elbow",       "Revolute 23",  90.0,  False),
+    ("wrist_roll",  "Revolute 26", 90.0,  False),   # J4: Gazebo=0 <-> Pi=90 neutral
     ("wrist_pitch", "Revolute 28", 90.0,  False),  # J5
     ("pen",         "Revolute 30", 90.0,  False),  # J6
 ]
 
-STATIC_JOINTS = {
-    "Revolute 26": 0.0,
-    "Revolute 28": 0.0,
-}
+STATIC_JOINTS = {}
 
 ALL_GAZEBO_JOINTS = [
     "Revolute 20", "Revolute 22", "Revolute 23",
@@ -73,7 +70,7 @@ class GazeboStateMirror(Node):
         }
 
         self.msg_count = 0
-        self.get_logger().info("🪞 Real-to-Sim mirror started (4-DOF)")
+        self.get_logger().info("🪞 Real-to-Sim mirror started (6-DOF)")
         self.get_logger().info("   Pi (radians) → Gazebo (radians)")
 
     def pi_rad_to_gazebo_rad(self, pi_rad, home_deg, inverted):

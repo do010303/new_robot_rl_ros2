@@ -24,7 +24,7 @@ This doc captures the complete working sequence to train in Gazebo and deploy on
 | Revolute 20 | base | 90 | No | TD-8120MG | CH0 |
 | Revolute 22 | shoulder | 90 | No | TD-8120MG | CH1 |
 | Revolute 23 | elbow | 90 | No | MG996R | CH4 |
-| Revolute 26 | wrist_roll | 90 | Yes | MG90S | CH8 |
+| Revolute 26 | wrist_roll | 0 | No | MG90S | CH8 |
 | Revolute 28 | wrist_pitch | 90 | No | MG90S | CH9 |
 | Revolute 30 | pen | 90 | No | MG90S | CH12 |
 
