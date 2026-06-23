@@ -91,6 +91,9 @@ setup(
             'gazebo_state_mirror = digital_twin.gazebo_state_mirror:main',
             'gazebo_to_real_mirror = digital_twin.gazebo_to_real_mirror:main',
             'verify_connection = digital_twin.verify_connection:main',
+            'export_replay_plan = digital_twin.export_replay_plan:main',
+            'pi_replay_executor = digital_twin.pi_replay_executor:main',
+            'replay_status_logger = digital_twin.replay_status_logger:main',
         ],
     },
 )

@@ -213,7 +213,26 @@ class GazeboPiMapper:
             else:
                 segment_indices.append(final_index)
 
-        segments = []
+        # Determine lead steps for lag compensation.
+        # Can be set via environment variable:
+        # - PI_REPLAY_LAG_COMP_STEPS: explicitly sets the number of lead steps.
+        # - PI_REPLAY_LAG_COMP_SECONDS: sets target seconds to compensate (default: 0.2s).
+        lead_steps = 0
+        lag_steps_env = os.environ.get('PI_REPLAY_LAG_COMP_STEPS')
+        if lag_steps_env is not None:
+            try:
+                lead_steps = max(0, int(lag_steps_env))
+            except ValueError:
+                pass
+        else:
+            lag_sec_env = os.environ.get('PI_REPLAY_LAG_COMP_SECONDS', '0.2')
+            try:
+                lag_sec = max(0.0, float(lag_sec_env))
+                lead_steps = int(round(lag_sec * replay_rate_hz))
+            except ValueError:
+                pass
+
+        raw_segments = []
         prev_idx = -1
         for sample_idx in segment_indices:
             segment_steps = sample_idx - prev_idx
@@ -224,15 +243,33 @@ class GazeboPiMapper:
                 )
 
             positions_rad = samples[sample_idx]
-            positions_deg = self.gazebo_positions_to_pi_deg(positions_rad)
-            segments.append({
+            raw_segments.append({
                 'sample_index': int(sample_idx),
                 'duration_sec': float(duration_sec),
-                'positions_rad': positions_rad.tolist(),
-                'positions_deg': [positions_deg[name] for name in self.pi_joint_names],
-                'joint_names_pi': list(self.pi_joint_names),
+                'positions_rad': positions_rad,
             })
             prev_idx = sample_idx
+
+        # Extract the original start position before any lead shift
+        original_start_rad = samples[0]
+        original_start_deg_dict = self.gazebo_positions_to_pi_deg(original_start_rad)
+        original_start_deg = [original_start_deg_dict[name] for name in self.pi_joint_names]
+
+        segments = []
+        num_segs = len(raw_segments)
+        for i in range(num_segs):
+            # Lead shift: command target of (i + lead_steps) early
+            target_idx = min(i + lead_steps, num_segs - 1)
+            compensated_rad = raw_segments[target_idx]['positions_rad']
+            compensated_deg = self.gazebo_positions_to_pi_deg(compensated_rad)
+
+            segments.append({
+                'sample_index': raw_segments[i]['sample_index'],
+                'duration_sec': raw_segments[i]['duration_sec'],
+                'positions_rad': compensated_rad.tolist(),
+                'positions_deg': [compensated_deg[name] for name in self.pi_joint_names],
+                'joint_names_pi': list(self.pi_joint_names),
+            })
 
         return {
             'source_dt_sec': float(sample_dt),
@@ -241,6 +278,8 @@ class GazeboPiMapper:
             'downsample_stride': int(downsample_stride),
             'segment_count': len(segments),
             'segments': segments,
+            'original_start_joint_deg': original_start_deg,
+            'lead_steps_applied': lead_steps,
         }
 
 
@@ -511,13 +550,13 @@ class SimToRealShadowBackend(GazeboBackend):
         self.node.get_logger().info(
             f"🔄 Replaying {len(segments)} Pi-safe segments for {label} at {rate:.1f}Hz"
         )
-        
+
         # Setup logging
         log_dir = os.path.join(os.getcwd(), 'training_results', 'logs')
         os.makedirs(log_dir, exist_ok=True)
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         log_path = os.path.join(log_dir, f"{label}_log_{timestamp}.txt")
-        
+
         with open(log_path, 'w') as f:
             f.write(f"=== {label.upper()} REPLAY LOG ===\n")
             f.write(f"Timestamp: {timestamp}\n")
@@ -525,10 +564,18 @@ class SimToRealShadowBackend(GazeboBackend):
             f.write(f"Total Segments: {len(segments)}\n")
             f.write("--------------------------------------------------------------------------------\n")
 
-        start_positions_deg = {
-            name: float(pos)
-            for name, pos in zip(segments[0]['joint_names_pi'], segments[0]['positions_deg'])
-        }
+        # Use original uncompensated start position if available, to prevent skipping first step
+        original_start_list = replay_plan.get('original_start_joint_deg')
+        if original_start_list is not None:
+            start_positions_deg = {
+                name: float(pos)
+                for name, pos in zip(self.mapper.pi_joint_names, original_start_list)
+            }
+        else:
+            start_positions_deg = {
+                name: float(pos)
+                for name, pos in zip(segments[0]['joint_names_pi'], segments[0]['positions_deg'])
+            }
         prep_str = (
             "🏠 Preparing physical robot for shadow replay...\n"
             "   Home -> move to replay start -> settle\n"
@@ -560,7 +607,7 @@ class SimToRealShadowBackend(GazeboBackend):
                 for name, pos in zip(segment['joint_names_pi'], segment['positions_deg'])
             }
             cmd_str = ", ".join(f"{k}={positions_deg[k]:.1f}°" for k in self.mapper.pi_joint_names)
-            
+
             # Send trajectory segment
             traj = self.mapper.build_pi_trajectory_msg(positions_deg, float(segment['duration_sec']))
             traj.header.stamp = self.node.get_clock().now().to_msg()
@@ -572,7 +619,7 @@ class SimToRealShadowBackend(GazeboBackend):
 
             # Sleep for segment duration
             time.sleep(float(segment['duration_sec']) + 0.02)
-            
+
             # Spin to process incoming '/pca9685_servo/joint_states' messages
             for _ in range(10):
                 rclpy.spin_once(self.node, timeout_sec=0.01)
@@ -670,7 +717,7 @@ class RealReplayBackend(MotionBackendBase):
 
     def home(self, duration: float = 2.0) -> bool:
         home_joints = np.zeros(len(self.mapper.gazebo_joint_names))
-            
+
         if not self.home_client.service_is_ready():
             return self.move_to_joint_positions(home_joints, duration=duration)
         future = self.home_client.call_async(Trigger.Request())

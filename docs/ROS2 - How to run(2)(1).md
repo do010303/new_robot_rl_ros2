@@ -1,283 +1,384 @@
-# ROS2 - How to run
+# ROS2 Robot Runbook
 
-## Digital Twin (Sim-to-Real) quick notes
+Đây là tài liệu chạy chính cho pipeline hiện tại. Folder `docs/` chỉ giữ một file này để tránh trùng lặp.
 
-- Old command topic: `/pca9685_servo/command` (`sensor_msgs/msg/JointState`) — immediate setpoint
-- New timed topic: `/pca9685_servo/trajectory` (`trajectory_msgs/msg/JointTrajectory`) — uses `time_from_start` to ramp over duration
-- Full step-by-step (Discovery Server + SUPER_CLIENT + deploy): see repo root `README.md`
+## 0. Luồng nên dùng
 
-**RUN 6-DOF:** Khởi chaỵ
-
+```text
+Option 7 train trên laptop
+-> export replay plan JSON
+-> copy JSON sang Pi
+-> Pi chạy replay offline bằng wicom_roboarm
 ```
-  ros2 launch wicom_roboarm wicom_roboarm.launch.py
+
+Vẫn giữ:
+
+```text
+Option 8: deploy cũ, laptop điều khiển trực tiếp Pi
 ```
 
-Timed example:
+Khuyến nghị hiện tại: dùng JSON replay trên Pi. Option 8 chỉ dùng để so sánh/debug.
 
+## 1. Topic và đơn vị
+
+| Hướng | Topic/service | Type | Đơn vị |
+| --- | --- | --- | --- |
+| Pi command nhanh | `/pca9685_servo/command` | `sensor_msgs/msg/JointState` | degree |
+| Pi trajectory timed | `/pca9685_servo/trajectory` | `trajectory_msgs/msg/JointTrajectory` | degree |
+| Pi feedback | `/pca9685_servo/joint_states` | `sensor_msgs/msg/JointState` | radian |
+| Pi home | `/pca9685_servo/home` | `std_srvs/srv/Trigger` | - |
+| Pi enable/disable | `/pca9685_servo/enable`, `/pca9685_servo/disable` | `std_srvs/srv/Trigger` | - |
+
+Joint Pi:
+
+```text
+base, shoulder, elbow, wrist_roll, wrist_pitch, pen
 ```
+
+Pin map đang dùng theo log launch:
+
+| Joint | PCA9685 |
+| --- | --- |
+| base | CH0 |
+| shoulder | CH1 |
+| elbow | CH4 |
+| wrist_roll | CH7 |
+| wrist_pitch | CH9 |
+| pen | CH15 |
+
+Nếu terminal launch in pin map khác, ưu tiên pin map trong terminal.
+
+## 2. Cập nhật code lên Pi
+
+Laptop:
+
+```bash
+cd ~/new_rl_ros2
+./scripts/deploy_pi_wicom_roboarm.sh
+```
+
+Pi:
+
+```bash
+ssh piros2@192.168.50.1
+cd ~/ros2_ws
+source /opt/ros/humble/setup.bash
+colcon build --packages-select wicom_roboarm
+source install/setup.bash
+```
+
+## 3. Chạy node tay robot trên Pi
+
+Pi terminal 1:
+
+```bash
+cd ~/ros2_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 launch wicom_roboarm wicom_roboarm.launch.py
+```
+
+Kiểm tra:
+
+```bash
+ros2 topic echo /pca9685_servo/joint_states
+ros2 topic hz /pca9685_servo/joint_states
+ros2 service call /pca9685_servo/home std_srvs/srv/Trigger
+```
+
+## 4. Điều khiển Pi nhanh
+
+Enable/home/disable:
+
+```bash
+ros2 service call /pca9685_servo/enable std_srvs/srv/Trigger
+ros2 service call /pca9685_servo/home std_srvs/srv/Trigger
+ros2 service call /pca9685_servo/disable std_srvs/srv/Trigger
+```
+
+Set một joint:
+
+```bash
+ros2 topic pub -r 10 -t 2 /pca9685_servo/command sensor_msgs/msg/JointState "{name:['base'], position:[135.0]}"
+```
+
+Set tất cả joint về 90 độ:
+
+```bash
+ros2 topic pub -r 10 -t 2 /pca9685_servo/command sensor_msgs/msg/JointState \
+  "{name:['base','shoulder','elbow','wrist_roll','wrist_pitch','pen'], position:[90.0,90.0,90.0,90.0,90.0,90.0]}"
+```
+
+Timed move 1 giây:
+
+```bash
 ros2 topic pub --once -w 1 /pca9685_servo/trajectory trajectory_msgs/msg/JointTrajectory \
   "{joint_names: ['base'], points: [{positions: [135.0], time_from_start: {sec: 1, nanosec: 0}}]}"
 ```
 
-Set Home - điều khiển từng góc
+## 5. Option 7 - train hiện tại
 
-```
-ros2 topic pub -r 10 -t 2 /pca9685_servo/command sensor_msgs/msg/JointState "{name:['base'], position:[90.0]}"
-ros2 topic pub -r 10 -t 2 /pca9685_servo/command sensor_msgs/msg/JointState "{name:['shoulder'], position:[180.0]}"
-ros2 topic pub -r 10 -t 2 /pca9685_servo/command sensor_msgs/msg/JointState "{name:['elbow'], position:[0.0]}"
-ros2 topic pub -r 10 -t 2 /pca9685_servo/command sensor_msgs/msg/JointState "{name:['wrist_roll'], position:[90.0]}"
-ros2 topic pub -r 10 -t 2 /pca9685_servo/command sensor_msgs/msg/JointState "{name:['wrist_pitch'], position:[90.0]}"
-ros2 topic pub -r 10 -t 2 /pca9685_servo/command sensor_msgs/msg/JointState "{name:['pen'], position:[90.0]}"
-```
+Laptop terminal 1, chạy Gazebo:
 
-
-
- **Auto Draw square**
-
-```
-python3 ~/ros2_ws/src/wicom_roboarm/src/wicom_roboarm_4dof_standalone.py --ros-args \
-  -p ch_base:=0 \
-  -p ch_shoulder:=1 -p ch_shoulder_mirror:=2 -p shoulder_mirror_enabled:=true -p shoulder_mirror_angle_max:=180.0 \
-  -p ch_elbow:=3 \
-  -p ch_wrist_pitch:=5 \
-  -p sign_shoulder:=-1.0 \
-  -p offset_shoulder_deg:=30.0 \
-  -p offset_wrist_pitch_deg:=30.0 \
-  -p offset_elbow_deg:=-30.0 \
-  -p fixed_channels:="[4,6]" -p fixed_degs:="[100.0,30.0]" \
-  -p sign_elbow:=-1.0 \
-  -p auto_draw:=true -p auto_loop:=true
+```bash
+cd ~/new_rl_ros2/ros2_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+unset ROS_DISCOVERY_SERVER FASTRTPS_DEFAULT_PROFILES_FILE FASTDDS_DEFAULT_PROFILES_FILE
+ros2 launch visual_servoing visual_servoing_test.launch.py
 ```
 
+Laptop terminal 2, chạy trainer:
 
-
-**Stream Video:**
-
-terminal 1:
-
+```bash
+cd ~/new_rl_ros2/ros2_ws/src/visual_servoing/scripts
+source /opt/ros/humble/setup.bash
+source ~/new_rl_ros2/ros2_ws/install/setup.bash
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+export FASTRTPS_DEFAULT_PROFILES_FILE=~/new_rl_ros2/ros2_ws/src/visual_servoing/config/fastdds_twin.xml
+python3 train_visual_servoing.py
 ```
+
+Menu:
+
+```text
+7  -> PID Tuning
+a/b -> reaching hoặc drawing
+sim -> train trong sim
+episodes -> số tập muốn train, ví dụ 30
+```
+
+Ghi chú:
+
+```text
+Mỗi episode chỉ chạy 1 lần.
+Không tự replay cuối episode.
+Reset/home vẫn giúp episode sau bắt đầu sạch.
+Artifact tốt nhất được lưu trong training_results/pkl.
+```
+
+Tùy chọn legacy nếu cố tình muốn replay phần cứng tự động:
+
+```bash
+export PID_SHADOW_AUTO_REPLAY=1
+export PID_SHADOW_REPLAY_BEST=1
+export PID_AUTO_HOME_ON_EXIT=0
+```
+
+## 6. Export replay JSON từ artifact
+
+Tìm artifact mới nhất:
+
+```bash
+cd ~/new_rl_ros2/ros2_ws/src/visual_servoing/scripts
+ls -lt training_results/pkl/pid_best_artifact_*.pkl | head
+```
+
+Export JSON, ví dụ drawing 3 Hz:
+
+```bash
+python3 digital_twin/export_replay_plan.py \
+  --artifact training_results/pkl/pid_best_artifact_sac_pid_tuning_drawing_sim_YYYYMMDD_HHMMSS.pkl \
+  --mode drawing \
+  --rate 3.0 \
+  --tolerance-deg 2.0 \
+  --output /tmp/pi_replay_plan_drawing.json
+```
+
+Gợi ý tốc độ:
+
+```text
+1 Hz -> test pin/nguồn yếu
+2 Hz -> an toàn để test lần đầu
+3 Hz -> mặc định nên dùng
+5 Hz -> chỉ thử khi log ổn định, ít LAG/LOST/I2C_ERROR
+```
+
+Inspect JSON:
+
+```bash
+python3 -m json.tool /tmp/pi_replay_plan_drawing.json | less
+```
+
+Copy sang Pi:
+
+```bash
+scp /tmp/pi_replay_plan_drawing.json piros2@192.168.50.1:~/ros2_ws/pi_replay_plan_drawing.json
+```
+
+Không cần train lại nếu đã có artifact `.pkl`. Chỉ cần export lại JSON từ artifact đó.
+
+## 7. Chạy JSON replay offline trên Pi
+
+Pi terminal 2, dry-run trước:
+
+```bash
+cd ~/ros2_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+ros2 run wicom_roboarm pi_replay_executor_node.py \
+  --plan ~/ros2_ws/pi_replay_plan_drawing.json \
+  --episodes 1 \
+  --replay-rate-hz 3.0 \
+  --tolerance-deg 2.0 \
+  --dry-run \
+  --print-segments
+```
+
+Chạy thật:
+
+```bash
+ros2 run wicom_roboarm pi_replay_executor_node.py \
+  --plan ~/ros2_ws/pi_replay_plan_drawing.json \
+  --episodes 3 \
+  --replay-rate-hz 3.0 \
+  --tolerance-deg 2.0 \
+  --print-segments
+```
+
+Chỉnh số tập và tốc độ ở đây:
+
+```text
+--episodes 5
+--replay-rate-hz 1.0
+--replay-rate-hz 2.0
+--replay-rate-hz 3.0
+--replay-rate-hz 5.0
+```
+
+Mặc định node home trước mỗi episode. Bỏ home nếu cần:
+
+```bash
+--no-home
+```
+
+Theo dõi:
+
+```bash
+ros2 topic echo /pca9685_servo/replay_status
+tail -f ~/ros2_ws/replay_logs/*.jsonl
+```
+
+Status:
+
+```text
+OK         segment đã chạy trong tolerance
+LAG        servo/Pi/I2C không theo kịp replay_rate_hz
+LOST       mất feedback joint_states hoặc feedback quá cũ
+I2C_ERROR  lỗi PCA9685/I2C
+```
+
+## 8. Option 8 - deploy cũ từ laptop
+
+Option 8 vẫn giữ để so sánh/debug, nhưng không phải đường khuyến nghị.
+
+Laptop:
+
+```bash
+cd ~/new_rl_ros2/ros2_ws/src/visual_servoing/scripts
+source /opt/ros/humble/setup.bash
+source ~/new_rl_ros2/ros2_ws/install/setup.bash
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+export FASTRTPS_DEFAULT_PROFILES_FILE=~/new_rl_ros2/ros2_ws/src/visual_servoing/config/fastdds_twin.xml
+python3 train_visual_servoing.py
+```
+
+Menu:
+
+```text
+8  -> Deploy to Pi
+a/b -> reaching hoặc drawing
+artifact -> Enter để lấy artifact mới nhất, hoặc chọn file
+gains -> Enter để lấy gains mới nhất
+episodes -> số lần chạy
+replay rate -> ví dụ 3.0 hoặc 5.0
+```
+
+Option 8 sẽ:
+
+```text
+home trước mỗi run
+gửi trajectory từ laptop sang Pi
+in commanded/actual/status từng segment
+lưu log trong training_results/logs/deploy_replay_log_*.txt
+lưu pkl trong training_results/pkl/deploy_results_*.pkl
+lưu plot trong training_results/png/deploy_comparison_*.png
+```
+
+Nếu network/DDS không ổn, chuyển sang JSON replay trên Pi ở mục 7.
+
+## 9. Debug nguồn pin và I2C
+
+Nếu chạy bằng nguồn cắm ổn nhưng pin cell lỗi, kiểm tra các dấu hiệu này:
+
+```text
+I2C error [Errno 121] Remote I/O error
+LAG liên tục với max_err lớn
+LOST và feedback_age tăng đều
+Robot vẫn giữ/chạy sau khi kill node vì PCA9685 còn giữ PWM cuối
+```
+
+Lệnh kiểm tra:
+
+```bash
+vcgencmd get_throttled
+dmesg -T | grep -i -E "voltage|under|thrott|i2c|error"
+i2cdetect -y 1
+ros2 topic hz /pca9685_servo/joint_states
+```
+
+Khuyến nghị phần cứng:
+
+```text
+Pin cell -> buck/BEC 5-6V dòng cao -> V+ servo trên PCA9685
+Pi dùng nguồn 5V riêng ổn định
+GND Pi, GND PCA9685, GND nguồn servo nối chung
+SDA/SCL ngắn, chắc, tránh đi song song dây nguồn servo
+Thêm tụ 1000uF-2200uF gần PCA9685 V+ servo
+```
+
+Khi cần dừng thật:
+
+```bash
+ros2 service call /pca9685_servo/disable std_srvs/srv/Trigger
+```
+
+Nếu service không phản hồi, cắt nguồn servo/PCA9685.
+
+## 10. Camera và UAV
+
+Camera Pi:
+
+```bash
 ros2 run web_video_server web_video_server
 ```
 
-teminal 2:
-
+```bash
+ros2 run usb_cam usb_cam_node_exe --ros-args \
+  -p video_device:="/dev/video0" \
+  -p image_width:=640 \
+  -p image_height:=480 \
+  -p pixel_format:="yuyv"
 ```
-ros2 run usb_cam usb_cam_node_exe --ros-args -p video_device:="/dev/video0" -p image_width:=640 -p image_height:=480 -p pixel_format:="yuyv"
-```
 
-Xem video: 
+Mở trên laptop:
 
-Laptop kết nối vào wifi của Pi mở chrome
-
-```
+```text
 http://192.168.50.1:8080/
 ```
 
+PX4:
 
-
-Chạy Mavlink Router sau khi reboot px4
-
-Bash
-
-```
-sudo systemctl restart mavlink-router
-```
-
-------
-
-### 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-#### Cách 1: Biến Pi thành Web Server (Xem trên trình duyệt Chrome/Edge) - CỰC HAY
-
-Bạn cài một gói nhỏ trên Pi, nó sẽ phát video ra dạng trang web. Bạn ngồi ở máy tính (Windows hay WSL đều được) mở Chrome lên là xem được.
-
-**Bước 1: Trên Pi (ROS 2), cài đặt gói web video:**
-
-Bash
-
-```
-sudo apt install ros-humble-web-video-server
-```
-
-**Bước 2: Chạy server:**
-
-Bash
-
-```
-ros2 run web_video_server web_video_server
-```
-
-**Bước 3: Trên PC (Windows/WSL):** Mở trình duyệt web và gõ địa chỉ: `http://<IP_CUA_PI>:8080`
-
-Bạn sẽ thấy một danh sách topic, bấm vào dòng `/image_raw` là xem được video trực tiếp, độ trễ cực thấp. Cách này tiện nhất vì không cần cài gì trên máy tính cả.
-
-
-
-```
-ros2 run camera_ros camera_node --ros-args -p width:=640 -p height:=480 -p format:="BGR888"
-
-ros2 run rqt_image_view rqt_image_view
-```
-
-
-
-**4DOF**
-
-ros2 launch wicom_roboarm wicom_roboarm_drawing_square.launch.py
-
-```
-python3 ~/ros2_ws/src/wicom_roboarm/src/wicom_roboarm_4dof_standalone.py --ros-args \
-  -p ch_base:=0 -p ch_shoulder:=1 -p ch_elbow:=2 -p ch_wrist_pitch:=3 \
-  -p sign_shoulder:=-1.0 \
-  -p sign_elbow:=-1.0 -p sign_wrist:=-1.0 \
-  -p offset_shoulder_deg:=30.0 \
-  -p auto_draw:=true -p auto_loop:=true
-```
-
-
-
-## Fix 
-
-**Run ros2 connect to PX4**
-
-```
+```bash
 MicroXRCEAgent serial --dev /dev/ttyS0 -b 921600
-```
-
-**Tạo Service để tự chạy khi khởi động** Tạo file: `sudo nano /etc/systemd/system/uxrce_agent.service`
-
-Ini, TOML
-
-```
-[Unit]
-Description=MicroXRCE-DDS Agent
-After=network.target
-
-[Service]
-ExecStart=/usr/local/bin/MicroXRCEAgent serial --dev /dev/ttyS0 -b 921600
-Restart=always
-User=ubuntu
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Lưu lại, sau đó:
-
-Bash
-
-```
-sudo systemctl enable uxrce_agent
-sudo systemctl start uxrce_agent
-```
-
-------
-
-Chạy Mavlink Router sau khi reboot px4
-
-Bash
-
-```
 sudo systemctl restart mavlink-router
 ```
 
-------
+Offboard teleop:
 
-### Run Robotic arm 4DOF
-
-```
-python3 ~/ros2_ws/src/wicom_roboarm/src/wicom_roboarm_4dof_standalone.py --ros-args \
-  -p i2c_bus:=1 -p pca_address:=0x40 -p use_mux:=true -p mux_address:=0x70 -p mux_channel:=2 \
-  -p ch_base:=0 -p ch_shoulder:=1 -p ch_elbow:=2 -p ch_wrist_pitch:=3 \
-  -p auto_draw:=true -p auto_loop:=true
-```
-
-
-
-### Run Offboard control
-
-```
-cd ros2_px4_teleop_example/
+```bash
+cd ros2_px4_teleop_example
 source install/setup.bash
 ros2 run teleop teleop
-```
-
-```
-source install/setup.bash
-ros2 run teleop_twist_rpyt_keyboard teleop_twist_rpyt_keyboard
-```
-
-
-
-```
-cd ros2_ws/
-source install/setup.bash
-ros2 run px4_ros_com offboard_control
-```
-
-
-
-# RUN ROS2 SIMULATION
-
-```
-PX4_GZ_WORLD=walls make px4_sitl gz_x500
-```
-
-```
-MicroXRCEAgent udp4 -p 8888
-```
-
-```
-cd ~/ws_ros2
-source install/local_setup.bash
-ros2 run px4_ros_com offboard_control
-```
-
-
-
-Bạn hãy tìm (gõ vào ô Search) và sửa 2 thông số sau:
-
-1. **`NAV_DLL_ACT`** (Navigation Data Link Loss Action - Hành động khi mất kết nối GCS)
-   - Mặc định: `Return` (hoặc `Hold`).
-   - **Sửa thành:** **`Disabled`** (Vô hiệu hóa) hoặc **`0`**.
-   - *Giải thích: Bảo PX4 là "Nếu mất kết nối với máy tính QGC thì kệ nó, cứ bay tiếp theo lệnh của ROS 2 đi".*
-2. **`COM_DL_LOSS_T`** (Data Link Loss Timeout - Thời gian chờ trước khi báo mất kết nối)
-   - Mặc định: `10` (giây).
-   - **Sửa thành:** **`60`** hoặc cao hơn.
-   - *Giải thích: Tăng thời gian chờ lên để nếu mạng WSL có bị lag một chút thì Drone cũng không hoảng loạn mà hạ cánh ngay.*
-
-
-
-```
-dos2unix ~/ros2_ws/src/wicom_roboarm/src/wicom_roboarm_drawing_ik_node.py
-cd ~/ros2_ws
-colcon build --symlink-install --packages-select wicom_roboarm
-source install/setup.bash
-
-ros2 launch wicom_roboarm wicom_roboarm.launch.py
-# terminal khác:
-ros2 run wicom_roboarm wicom_roboarm_drawing_ik_node.py
-# terminal khác:
-ros2 topic pub --once /target_xyz_cm geometry_msgs/msg/Point "{x: 20.0, y: 0.0, z: 15.0}"
-
-
-ros2 topic pub -r 10 -t 2 /pca9685_servo/command sensor_msgs/msg/JointState "{name:['shoulder'], position:[90.0]}"
 ```

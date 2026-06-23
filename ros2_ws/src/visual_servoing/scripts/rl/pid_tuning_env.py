@@ -787,7 +787,8 @@ class PIDTuningEnv:
         if self.mode == 'drawing':
             self.last_episode_artifact['actual_path_xyz'] = np.asarray(actual_path_xyz, dtype=np.float64).tolist()
         
-        if self.control_backend_name == 'sim_to_real_shadow' and commanded_joint_trace:
+        auto_shadow_replay = os.environ.get('PID_SHADOW_AUTO_REPLAY', '0').strip().lower() in {'1', 'true', 'yes', 'y'}
+        if self.control_backend_name == 'sim_to_real_shadow' and commanded_joint_trace and auto_shadow_replay:
             self._log("🔄 Replaying episode trajectory on physical robot...")
             ok = self.base_env.motion_backend.replay_episode_trajectory(
                 commanded_trace_rad=replay_joint_trace_smoothed,
@@ -799,6 +800,8 @@ class PIDTuningEnv:
                 self._log("✅ Pi replay complete")
             else:
                 self._log("⚠️ Pi replay had issues (training continues)")
+        elif self.control_backend_name == 'sim_to_real_shadow' and commanded_joint_trace:
+            self._log("⏭️ Shadow hardware replay skipped; artifact/export is saved for manual Pi-local replay")
 
         # Single-step MDP: always done after one trajectory
         done = True

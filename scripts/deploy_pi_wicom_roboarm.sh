@@ -28,5 +28,23 @@ Next on the Pi:
   colcon build --packages-select wicom_roboarm
   source install/setup.bash
   ros2 launch wicom_roboarm wicom_roboarm.launch.py
-EOF
 
+Pi-local replay plan runner:
+  # Copy a quantized pi_replay_plan_v1 JSON to the Pi first, e.g.
+  #   scp /tmp/pi_replay_plan_drawing.json ${PI_USER}@${PI_HOST}:${PI_WS}/pi_replay_plan_drawing.json
+
+  # Option A: run beside the existing robot launch
+  ros2 run wicom_roboarm pi_replay_executor_node.py \\
+    --plan ${PI_WS}/pi_replay_plan_drawing.json \\
+    --episodes 1 \\
+    --replay-rate-hz 3.0 \\
+    --print-segments \\
+    --log-dir ${PI_WS}/replay_logs
+
+  # Option B: launch robot node + replay executor together
+  ros2 launch wicom_roboarm wicom_roboarm_replay.launch.py \\
+    replay_plan:=${PI_WS}/pi_replay_plan_drawing.json \\
+    episodes:=1 \\
+    replay_rate_hz:=3.0 \\
+    tolerance_deg:=2.0
+EOF
