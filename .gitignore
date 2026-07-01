@@ -59,3 +59,11 @@ ref/
 # === Python virtual environments ===
 .venv/
 
+# === Excluded files from user request ===
+FInal report/
+backups/
+ref/
+*performance_test*
+/ROS2 - How to run(2)(1).md
+
+

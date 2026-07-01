@@ -14,6 +14,10 @@ def generate_launch_description():
     episodes = LaunchConfiguration("episodes")
     replay_rate_hz = LaunchConfiguration("replay_rate_hz")
     tolerance_deg = LaunchConfiguration("tolerance_deg")
+    publish_mode = LaunchConfiguration("publish_mode")
+    stream_hz = LaunchConfiguration("stream_hz")
+    move_time_sec = LaunchConfiguration("move_time_sec")
+    deadband_deg = LaunchConfiguration("deadband_deg")
     log_dir = LaunchConfiguration("log_dir")
 
     unified = Node(
@@ -29,6 +33,7 @@ def generate_launch_description():
             ("home", "/pca9685_servo/home"),
             ("command", "/pca9685_servo/command"),
             ("trajectory", "/pca9685_servo/trajectory"),
+            ("hardware_status", "/pca9685_servo/hardware_status"),
         ],
     )
 
@@ -42,6 +47,10 @@ def generate_launch_description():
             "--episodes", episodes,
             "--replay-rate-hz", replay_rate_hz,
             "--tolerance-deg", tolerance_deg,
+            "--publish-mode", publish_mode,
+            "--stream-hz", stream_hz,
+            "--move-time-sec", move_time_sec,
+            "--deadband-deg", deadband_deg,
             "--log-dir", log_dir,
             "--print-segments",
         ],
@@ -52,6 +61,10 @@ def generate_launch_description():
         DeclareLaunchArgument("episodes", default_value="1"),
         DeclareLaunchArgument("replay_rate_hz", default_value="3.0"),
         DeclareLaunchArgument("tolerance_deg", default_value="2.0"),
+        DeclareLaunchArgument("publish_mode", default_value="keyframe-scurve"),
+        DeclareLaunchArgument("stream_hz", default_value="10.0"),
+        DeclareLaunchArgument("move_time_sec", default_value="1.2"),
+        DeclareLaunchArgument("deadband_deg", default_value="0.5"),
         DeclareLaunchArgument("log_dir", default_value="~/ros2_ws/replay_logs"),
         unified,
         replay,

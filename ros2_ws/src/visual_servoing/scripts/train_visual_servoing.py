@@ -2600,6 +2600,7 @@ def train_pid_tuning(
     require_board_detection=False,
     replay_artifact_path=None,
     replay_gains_path=None,
+    segment_steps=20,
 ):
     """
     Train RL agent to optimize PID gains for trajectory tracking.
@@ -2692,7 +2693,7 @@ def train_pid_tuning(
         # Create PID tuning environment (wraps base_env)
         # Targets = random joints or drawing shape
         print("\n🎛️  Creating PID Tuning environment...")
-        env = PIDTuningEnv(base_env, mode=mode)
+        env = PIDTuningEnv(base_env, mode=mode, segment_steps=segment_steps)
 
         # Get training parameters
         print("\n📊 PID Tuning Configuration")
@@ -3972,12 +3973,22 @@ def main():
         if control_backend == 'real_replay':
             replay_artifact_path, replay_gains_path = prompt_pid_replay_paths(mode)
 
+        segment_steps = 20
+        if mode == 'drawing':
+            steps_input = input("Drawing segment steps (default 20, lower = faster): ").strip()
+            if steps_input:
+                try:
+                    segment_steps = int(steps_input)
+                except ValueError:
+                    pass
+
         train_pid_tuning(
             mode=mode,
             control_backend=control_backend,
             require_board_detection=require_board_detection,
             replay_artifact_path=replay_artifact_path,
             replay_gains_path=replay_gains_path,
+            segment_steps=segment_steps,
         )
     elif choice == '8':
         # Standalone Deploy to Pi

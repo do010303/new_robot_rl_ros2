@@ -15,11 +15,12 @@ install(PROGRAMS
   src/wicom_roboarm_rl_node.py
   src/wicom_roboarm_drawing_ik_node.py
   src/pi_replay_executor_node.py
+  src/send_drawing_goals.py
   scripts/pca9685_kill_all.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
-install(DIRECTORY launch config
+install(DIRECTORY launch config onnx_models
   DESTINATION share/${PROJECT_NAME}
 )
 

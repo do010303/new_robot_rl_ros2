@@ -37,7 +37,10 @@ Pi-local replay plan runner:
   ros2 run wicom_roboarm pi_replay_executor_node.py \\
     --plan ${PI_WS}/pi_replay_plan_drawing.json \\
     --episodes 1 \\
-    --replay-rate-hz 3.0 \\
+    --publish-mode keyframe-scurve \\
+    --stream-hz 10.0 \\
+    --move-time-sec 1.2 \\
+    --deadband-deg 0.5 \\
     --print-segments \\
     --log-dir ${PI_WS}/replay_logs
 
@@ -46,5 +49,9 @@ Pi-local replay plan runner:
     replay_plan:=${PI_WS}/pi_replay_plan_drawing.json \\
     episodes:=1 \\
     replay_rate_hz:=3.0 \\
-    tolerance_deg:=2.0
+    tolerance_deg:=2.0 \\
+    publish_mode:=keyframe-scurve \\
+    stream_hz:=10.0 \\
+    move_time_sec:=1.2 \\
+    deadband_deg:=0.5
 EOF

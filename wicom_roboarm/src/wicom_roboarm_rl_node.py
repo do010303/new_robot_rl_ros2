@@ -82,21 +82,59 @@ class RoboArmRLNode(Node):
         # Parameters
         self.declare_parameter('actor_path', 'onnx_models/actor_drawing.onnx')
         self.declare_parameter('nik_path', 'onnx_models/neural_ik.onnx')
+        self.declare_parameter('use_quantized', False)
         self.declare_parameter('control_rate_hz', 5.0)
         self.declare_parameter('waypoint_tolerance', 0.01) # 1cm
         self.declare_parameter('home_deg', 90.0) # For servo command mapping
         
         # Paths
-        deploy_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        
         actor_p = self.get_parameter('actor_path').value
-        if not os.path.isabs(actor_p):
-            actor_p = os.path.join(deploy_dir, actor_p)
-            
         nik_p = self.get_parameter('nik_path').value
-        if not os.path.isabs(nik_p):
-            nik_p = os.path.join(deploy_dir, nik_p)
+        use_quantized = self.get_parameter('use_quantized').value
+        
+        if use_quantized:
+            a_dir, a_file = os.path.split(actor_p)
+            a_name, a_ext = os.path.splitext(a_file)
+            actor_p = os.path.join(a_dir, f"{a_name}_quantized{a_ext}")
             
+            n_dir, n_file = os.path.split(nik_p)
+            n_name, n_ext = os.path.splitext(n_file)
+            nik_p = os.path.join(n_dir, f"{n_name}_quantized{n_ext}")
+        
+        # 1. Try resolving via standard ament share index
+        resolved_via_share = False
+        try:
+            from ament_index_python.packages import get_package_share_directory
+            share_dir = get_package_share_directory('wicom_roboarm')
+            share_actor = os.path.join(share_dir, actor_p)
+            share_nik = os.path.join(share_dir, nik_p)
+            if os.path.exists(share_actor) and os.path.exists(share_nik):
+                actor_p = share_actor
+                nik_p = share_nik
+                resolved_via_share = True
+        except Exception:
+            pass
+            
+        # 2. Fallback to legacy/relative paths if not found in share directory
+        if not resolved_via_share:
+            deploy_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            
+            if not os.path.isabs(actor_p):
+                actor_p_legacy = os.path.join(deploy_dir, actor_p)
+                actor_p_source = os.path.join(deploy_dir, 'wicom_roboarm', actor_p)
+                if os.path.exists(actor_p_source):
+                    actor_p = actor_p_source
+                else:
+                    actor_p = actor_p_legacy
+                    
+            if not os.path.isabs(nik_p):
+                nik_p_legacy = os.path.join(deploy_dir, nik_p)
+                nik_p_source = os.path.join(deploy_dir, 'wicom_roboarm', nik_p)
+                if os.path.exists(nik_p_source):
+                    nik_p = nik_p_source
+                else:
+                    nik_p = nik_p_legacy
+        
         # Load ONNX models
         self.get_logger().info(f"Loading Actor: {actor_p}")
         self.actor_session = ort.InferenceSession(actor_p)

@@ -5,19 +5,11 @@
 ## 0. Luồng nên dùng
 
 ```text
-Option 7 train trên laptop
--> export replay plan JSON
--> copy JSON sang Pi
--> Pi chạy replay offline bằng wicom_roboarm
+Option 8: Digital Twin Realtime Mirror (Laptop điều khiển Pi chạy song song với Gazebo)
+- Giúp nhìn trực tiếp robot mô phỏng và robot thật để so sánh độ trễ/sai lệch
+Option 7: Mô phỏng/Training thuần trên laptop (để sinh artifact, pkl)
+JSON Replay: Chạy offline trên Pi (dùng làm fallback/debug sau)
 ```
-
-Vẫn giữ:
-
-```text
-Option 8: deploy cũ, laptop điều khiển trực tiếp Pi
-```
-
-Khuyến nghị hiện tại: dùng JSON replay trên Pi. Option 8 chỉ dùng để so sánh/debug.
 
 ## 1. Topic và đơn vị
 
@@ -185,6 +177,14 @@ python3 digital_twin/export_replay_plan.py \
   --output /tmp/pi_replay_plan_drawing.json
 ```
 
+Với artifact drawing, exporter sẽ ưu tiên `target_metadata.shape_joint_waypoints` để dựng lại hình vuông nominal đúng một lần. Không dùng `replay_trajectory_rad` cũ nếu nó chứa tail lặp, và không dùng `commanded_trajectory_rad` nếu PID correction làm méo hình. JSON mới sẽ có:
+
+```text
+"trajectory_source": "target_metadata.shape_joint_waypoints"
+"keyframe_count": số điểm chính để Pi nội suy S-curve
+"keyframes_deg": các keyframe Pi-degree
+```
+
 Gợi ý tốc độ:
 
 ```text
@@ -220,7 +220,10 @@ source install/setup.bash
 ros2 run wicom_roboarm pi_replay_executor_node.py \
   --plan ~/ros2_ws/pi_replay_plan_drawing.json \
   --episodes 1 \
-  --replay-rate-hz 3.0 \
+  --publish-mode keyframe-scurve \
+  --stream-hz 10.0 \
+  --move-time-sec 1.2 \
+  --deadband-deg 0.5 \
   --tolerance-deg 2.0 \
   --dry-run \
   --print-segments
@@ -231,21 +234,39 @@ Chạy thật:
 ```bash
 ros2 run wicom_roboarm pi_replay_executor_node.py \
   --plan ~/ros2_ws/pi_replay_plan_drawing.json \
-  --episodes 3 \
-  --replay-rate-hz 3.0 \
+  --episodes 1 \
+  --publish-mode keyframe-scurve \
+  --stream-hz 10.0 \
+  --move-time-sec 1.2 \
+  --deadband-deg 0.5 \
   --tolerance-deg 2.0 \
   --print-segments
 ```
 
-Chỉnh số tập và tốc độ ở đây:
+Chỉnh số tập và độ mượt ở đây:
 
 ```text
 --episodes 5
---replay-rate-hz 1.0
---replay-rate-hz 2.0
---replay-rate-hz 3.0
---replay-rate-hz 5.0
+--move-time-sec 1.5   chậm hơn, mượt hơn
+--move-time-sec 1.2   mặc định test đầu tiên
+--move-time-sec 1.0   nhanh hơn sau khi ổn
+--stream-hz 10.0      giống project S-curve mẫu, ít spam I2C
+--stream-hz 20.0      thử sau nếu 10Hz ổn
+--deadband-deg 0.5    giảm lệnh nhỏ gây jitter
+--deadband-deg 0.3    mịn hơn nhưng gửi nhiều lệnh hơn
 ```
+
+Mặc định executor dùng `--publish-mode keyframe-scurve`, tức là lấy `keyframes_deg` trong JSON, sinh S-curve giữa các điểm chính, rồi publish `/pca9685_servo/command`. Đây là flow gần nhất với project `com_arm_uav-main`: quỹ đạo được làm mượt trước, Pi driver chỉ bám theo command.
+
+So sánh với kiểu cũ nếu cần debug:
+
+```bash
+--publish-mode stream
+--publish-mode trajectory
+--publish-mode scurve
+```
+
+`trajectory` là legacy, dễ reset motion theo segment. `stream` và `scurve` vẫn dùng danh sách segment, nên không phải đường khuyến nghị cho servo thật nếu đã có `keyframes_deg`.
 
 Mặc định node home trước mỗi episode. Bỏ home nếu cần:
 
@@ -269,44 +290,146 @@ LOST       mất feedback joint_states hoặc feedback quá cũ
 I2C_ERROR  lỗi PCA9685/I2C
 ```
 
-## 8. Option 8 - deploy cũ từ laptop
+Lấy log vừa chạy trên Pi:
 
-Option 8 vẫn giữ để so sánh/debug, nhưng không phải đường khuyến nghị.
+```bash
+cd ~/ros2_ws/replay_logs
+latest=$(ls -t pi_replay_executor_log_*.jsonl | head -1)
+echo "$latest"
+tail -n 5 "$latest"
+```
 
-Laptop:
+Nếu tên file log nhìn "cũ" như `20260609` hoặc `20260612`, nguyên nhân thường là clock trên Raspberry Pi chưa sync đúng ngày. Tên file chỉ lấy từ giờ hệ thống của Pi, không phải ngày thật của laptop.
+
+Copy log về laptop:
+
+```bash
+scp piros2@192.168.50.1:~/ros2_ws/replay_logs/pi_replay_executor_log_YYYYMMDD_HHMMSS.jsonl /tmp/
+```
+
+Log replay hiện bắt tốt các lỗi cấp segment như `LAG`, `LOST`, `I2C_ERROR`, `cmd_deg`, `actual_deg`, `cmd_delta_deg`, `cmd_speed_deg_s`. Nó chưa đo được rung/giật rất nhanh bên trong một segment; muốn đo kiểu đó cần log joint_states/PWM ở tần số cao hơn.
+
+Ghi chú làm mượt servo:
+
+```text
+wicom_roboarm hiện dùng trajectory_profile=min_jerk.
+Profile này là S-curve bậc 5: 10t^3 - 15t^4 + 6t^5.
+trajectory_update_rate_hz=50 giúp mỗi segment có nhiều điểm nội suy hơn.
+Nếu cần so sánh, đổi trajectory_profile thành linear trong wicom_roboarm/config/servos.yaml.
+```
+
+Ctrl-C launch:
+
+```text
+wicom_roboarm_unified_node.py gọi set_all_off() khi shutdown.
+shutdown_behavior=off để Ctrl-C tắt PWM, không tự chạy về neutral trước khi tắt.
+Nếu I2C bị treo hoặc process bị kill cứng, vẫn nên cắt nguồn servo/PCA9685.
+```
+
+## 8. Option 8 - Digital Twin Realtime Mirror
+
+Chạy training + mirroring cùng lúc trong 1 terminal. Mirror chạy background bắt `/joint_states` từ Gazebo, training chạy foreground di chuyển robot trong sim. Khi robot sim cử động, robot thật trên Pi bám theo realtime.
+
+```text
+┌──────────┐   /joint_states   ┌──────────────────┐  /pca9685_servo/command  ┌─────┐
+│  Gazebo  │ ───────────────→  │ sim_to_pi_mirror │ ───────────────────────→ │ Pi  │
+│  + Train │   (radian, 50Hz)  │  (background)    │   (degree, 10Hz)        │     │
+└──────────┘                   │  deadband 0.5°   │                         └─────┘
+                               └──────────────────┘
+```
+
+### Environment Variables (BẮT BUỘC trên cả 2 máy)
+
+```bash
+export ROS_DOMAIN_ID=0
+export ROS_LOCALHOST_ONLY=0
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+export FASTRTPS_DEFAULT_PROFILES_FILE=~/new_rl_ros2/ros2_ws/src/visual_servoing/config/fastdds_twin.xml
+```
+
+### Bước 1: Pi — Khởi chạy node servo
+
+```bash
+ssh piros2@192.168.50.1
+cd ~/ros2_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+export ROS_DOMAIN_ID=0
+export ROS_LOCALHOST_ONLY=0
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+ros2 launch wicom_roboarm wicom_roboarm.launch.py
+```
+
+### Bước 2: Laptop Terminal 1 — Khởi chạy Gazebo
+
+```bash
+cd ~/new_rl_ros2/ros2_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+export ROS_DOMAIN_ID=0
+export ROS_LOCALHOST_ONLY=0
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+export FASTRTPS_DEFAULT_PROFILES_FILE=~/new_rl_ros2/ros2_ws/src/visual_servoing/config/fastdds_twin.xml
+ros2 launch visual_servoing visual_servoing_test.launch.py
+```
+
+### Bước 3: Laptop Terminal 2 — Chạy Option 8 (mirror + training)
 
 ```bash
 cd ~/new_rl_ros2/ros2_ws/src/visual_servoing/scripts
 source /opt/ros/humble/setup.bash
 source ~/new_rl_ros2/ros2_ws/install/setup.bash
+export ROS_DOMAIN_ID=0
+export ROS_LOCALHOST_ONLY=0
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 export FASTRTPS_DEFAULT_PROFILES_FILE=~/new_rl_ros2/ros2_ws/src/visual_servoing/config/fastdds_twin.xml
 python3 train_visual_servoing.py
 ```
 
-Menu:
+Chọn **8** từ menu. Script sẽ hỏi:
 
 ```text
-8  -> Deploy to Pi
-a/b -> reaching hoặc drawing
-artifact -> Enter để lấy artifact mới nhất, hoặc chọn file
-gains -> Enter để lấy gains mới nhất
-episodes -> số lần chạy
-replay rate -> ví dụ 3.0 hoặc 5.0
+Mirror publish rate Hz (default 10):     ← Enter để dùng 10Hz
+Mirror deadband degrees (default 0.5):   ← Enter để dùng 0.5°
+
+Select training mode to run WITH mirror:
+  a. 📍 PID Reaching
+  b. 🖋️  PID Drawing      ← khuyến nghị test đầu tiên
+  c. 🎮 Manual Control
+Select (a/b/c, default=b): b
+
+Require live board detection? (y/N):   ← Nhập 'y' nếu muốn nhận diện board / 'n' để dùng fallback
+Drawing segment steps (default 20, lower = faster):   ← Enter để dùng 20 steps, nhập số nhỏ hơn (vd: 10, 5) để robot di chuyển nhanh hơn
 ```
 
-Option 8 sẽ:
+Sau khi chọn mode, script tự động:
 
 ```text
-home trước mỗi run
-gửi trajectory từ laptop sang Pi
-in commanded/actual/status từng segment
-lưu log trong training_results/logs/deploy_replay_log_*.txt
-lưu pkl trong training_results/pkl/deploy_results_*.pkl
-lưu plot trong training_results/png/deploy_comparison_*.png
+1. Start sim_to_pi_mirror.py ở background (subscribe /joint_states, publish /pca9685_servo/command)
+2. Chạy training/manual ở foreground (di chuyển robot trong Gazebo)
+3. Mỗi khi Gazebo joint thay đổi → mirror forward sang Pi → robot thật bám theo
+4. Khi training xong hoặc Ctrl+C → tự kill mirror
 ```
 
-Nếu network/DDS không ổn, chuyển sang JSON replay trên Pi ở mục 7.
+### Kiểm tra trước khi chạy (optional)
+
+Nếu không chắc Pi có online không, chạy riêng:
+
+```bash
+python3 digital_twin/verify_connection.py
+```
+
+### Tham số mirror
+
+```text
+--rate-hz 10    mặc định, an toàn cho I2C trên Pi
+--rate-hz 5     giảm nếu bị nghẽn I2C
+--rate-hz 20    thử nếu 10Hz ổn và muốn mượt hơn
+
+--deadband-deg 0.5   mặc định, lọc thay đổi nhỏ
+--deadband-deg 1.0   giảm spam nếu cần
+--deadband-deg 0.2   mịn hơn, nhiều lệnh hơn
+```
 
 ## 9. Debug nguồn pin và I2C
 

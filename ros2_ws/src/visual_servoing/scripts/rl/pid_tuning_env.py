@@ -126,7 +126,7 @@ class PIDTuningEnv:
     """
     
     def __init__(self, base_env, n_joints: int = 6, mode: str = 'reaching',
-                 ik_policy_mode: Optional[str] = None):
+                 ik_policy_mode: Optional[str] = None, segment_steps: int = 20):
         """
         Initialize PID Tuning Environment.
         
@@ -137,6 +137,7 @@ class PIDTuningEnv:
 
         """
         self.base_env = base_env
+        self.segment_steps = segment_steps
         self.n_joints = n_joints
         self.control_backend_name = getattr(base_env, 'control_backend_name', 'sim')
         
@@ -221,6 +222,8 @@ class PIDTuningEnv:
             f"/ gazebo_raw={self.j4_lock_raw:.2f}rad / physical≈90deg"
         )
         self._log(f"  Trajectory: {TRAJECTORY_STEPS} steps, {TRAJECTORY_DURATION}s")
+        if self.mode == 'drawing':
+            self._log(f"  Drawing mode: segment_steps={self.segment_steps} ({self.segment_steps * TRAJECTORY_DT:.3f}s per waypoint)")
         self._log(f"  PID gain ranges: Kp=[0, {self.pid.GAIN_RANGES['Kp'][1]}], "
                   f"Ki=[0, {self.pid.GAIN_RANGES['Ki'][1]}], "
                   f"Kd=[0, {self.pid.GAIN_RANGES['Kd'][1]}]")
@@ -497,7 +500,7 @@ class PIDTuningEnv:
             current_pos = q_start
             
             # Reduced steps per short drawing segment (usually waypoints are close)
-            SEGMENT_STEPS = 20
+            SEGMENT_STEPS = self.segment_steps
             
             # Since reset() already moved us to shape_joint_waypoints[0], 
             # we draw the remaining points
@@ -531,7 +534,7 @@ class PIDTuningEnv:
         actual_path_xyz = []  # To visualize the physically drawn line
         # We start checking at index 1 because the reset moved us to idx 0
         segment_boundary_idx = 1
-        SEGMENT_STEPS = 20 if self.mode == 'drawing' else 0
+        SEGMENT_STEPS = self.segment_steps if self.mode == 'drawing' else 0
 
         def _sleep_to_rate(start_time: float):
             """Enforce fixed control rate for a single tick."""

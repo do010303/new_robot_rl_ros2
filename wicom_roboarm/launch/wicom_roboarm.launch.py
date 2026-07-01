@@ -23,6 +23,7 @@ def generate_launch_description():
             ("home",         "/pca9685_servo/home"),
             ("command",      "/pca9685_servo/command"),
             ("trajectory",   "/pca9685_servo/trajectory"),
+            ("hardware_status", "/pca9685_servo/hardware_status"),
         ],
     )
 

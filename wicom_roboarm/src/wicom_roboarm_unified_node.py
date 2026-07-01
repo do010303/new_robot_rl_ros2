@@ -181,6 +181,9 @@ class UnifiedRoboArmNode(Node):
 
         self.declare_parameter("publish_rate_hz", 10.0)
         self.declare_parameter("trajectory_update_rate_hz", 25.0)
+        self.declare_parameter("trajectory_profile", "min_jerk")  # linear|min_jerk
+        self.declare_parameter("default_moving_time_sec", 0.0)
+        self.declare_parameter("command_deadband_deg", 0.0)
         self.declare_parameter("command_timeout_sec", 1.0)
         self.declare_parameter("timeout_behavior", "hold")     # hold|neutral|off
         self.declare_parameter("shutdown_behavior", "neutral")  # hold|neutral|off
@@ -201,6 +204,9 @@ class UnifiedRoboArmNode(Node):
 
         self.publish_rate_hz     = float(self.get_parameter("publish_rate_hz").value)
         self.trajectory_update_rate_hz = float(self.get_parameter("trajectory_update_rate_hz").value)
+        self.trajectory_profile = str(self.get_parameter("trajectory_profile").value).strip().lower()
+        self.default_moving_time_sec = float(self.get_parameter("default_moving_time_sec").value)
+        self.command_deadband_deg = max(0.0, float(self.get_parameter("command_deadband_deg").value))
         self.command_timeout_sec = float(self.get_parameter("command_timeout_sec").value)
         self.timeout_behavior    = str(self.get_parameter("timeout_behavior").value)
         self.shutdown_behavior   = str(self.get_parameter("shutdown_behavior").value)
@@ -314,7 +320,10 @@ class UnifiedRoboArmNode(Node):
         self.get_logger().info(
             f"Unified RoboArm started (no mux, direct PCA9685): "
             f"PCA=0x{self.pca_address:02X} pwm={self.pwm_freq:.0f}Hz "
-            f"enabled={self.enabled} | "
+            f"enabled={self.enabled} trajectory_profile={self.trajectory_profile} "
+            f"trajectory_update={self.trajectory_update_rate_hz:.0f}Hz "
+            f"default_move={self.default_moving_time_sec:.2f}s "
+            f"deadband={self.command_deadband_deg:.2f}deg | "
             + " | ".join(servo_info)
         )
 
@@ -379,6 +388,14 @@ class UnifiedRoboArmNode(Node):
         self.current_deg[idx] = target
         self.last_cmd_time[idx] = self._now_s()
 
+    def _shape_trajectory_progress(self, alpha: float) -> float:
+        alpha = max(0.0, min(float(alpha), 1.0))
+        if self.trajectory_profile in ("min_jerk", "minimum_jerk", "s_curve", "scurve"):
+            a2 = alpha * alpha
+            a3 = a2 * alpha
+            return 10.0 * a3 - 15.0 * a3 * alpha + 6.0 * a3 * a2
+        return alpha
+
     def _start_timed_trajectory(self, target_deg_by_idx, duration_sec: float, source: str):
         now_wall = time.monotonic()
         addressed_indices = sorted(target_deg_by_idx.keys())
@@ -405,7 +422,8 @@ class UnifiedRoboArmNode(Node):
 
         names = ', '.join(self.joint_names[idx] for idx in addressed_indices)
         self.get_logger().info(
-            f"Timed trajectory accepted from {source}: joints=[{names}] dur={duration_sec:.2f}s"
+            f"Timed trajectory accepted from {source}: joints=[{names}] "
+            f"dur={duration_sec:.2f}s profile={self.trajectory_profile}"
         )
 
     # ─── ROS callbacks ───
@@ -418,7 +436,7 @@ class UnifiedRoboArmNode(Node):
             self.get_logger().warn("Auto enable outputs, received /command JointState")
             self.enabled = True
 
-        self._cancel_active_trajectory()
+        target_deg_by_idx = {}
 
         for name, pos in zip(msg.name, msg.position):
             if name not in self.name_to_idx:
@@ -431,11 +449,26 @@ class UnifiedRoboArmNode(Node):
                 angle = math.degrees(angle)
 
             target = max(self.limits_min_by_idx[idx], min(self.limits_max_by_idx[idx], angle))
+            if abs(target - float(self.current_deg[idx])) < self.command_deadband_deg:
+                continue
+            target_deg_by_idx[idx] = target
 
-            try:
-                self._set_joint_target_now(idx, target)
-            except Exception as e:
-                self.get_logger().error(f"I2C error command for {name}: {e}")
+        if not target_deg_by_idx:
+            return
+
+        try:
+            if self.default_moving_time_sec > 0.0:
+                self._start_timed_trajectory(
+                    target_deg_by_idx,
+                    self.default_moving_time_sec,
+                    source="command",
+                )
+            else:
+                self._cancel_active_trajectory()
+                for idx, target in target_deg_by_idx.items():
+                    self._set_joint_target_now(idx, target)
+        except Exception as e:
+            self.get_logger().error(f"I2C error command: {e}")
 
     def _on_trajectory(self, msg: JointTrajectory):
         if not msg.joint_names or not msg.points:
@@ -472,12 +505,13 @@ class UnifiedRoboArmNode(Node):
         duration_sec = max(float(traj["duration_sec"]), 1e-6)
         elapsed = time.monotonic() - float(traj["start_wall"])
         alpha = max(0.0, min(elapsed / duration_sec, 1.0))
+        shaped_alpha = self._shape_trajectory_progress(alpha)
         now_ros = self._now_s()
 
         for idx in traj["indices"]:
             start = float(traj["start_deg"][idx])
             target = float(traj["target_deg"][idx])
-            commanded = start + alpha * (target - start)
+            commanded = start + shaped_alpha * (target - start)
             try:
                 self.apply_joint(idx, commanded)
                 self.current_deg[idx] = commanded
@@ -572,7 +606,8 @@ def main():
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

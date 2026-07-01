@@ -3,6 +3,11 @@
   FastDDS profile for Digital Twin over Pi Wi-Fi hotspot.
   Disables multicast discovery and uses unicast peers only.
   Use on BOTH Pi and Laptop.
+
+  IMPORTANT:
+  1. Both machines must set export ROS_LOCALHOST_ONLY=0.
+  2. Raspberry Pi Hotspot IP must be 192.168.50.1 (configured below).
+  3. Ensure FASTRTPS_DEFAULT_PROFILES_FILE points to this file on both machines.
 -->
 <profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
     <participant profile_name="participant_profile" is_default_profile="true">

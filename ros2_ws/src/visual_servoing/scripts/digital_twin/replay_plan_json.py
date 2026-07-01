@@ -41,20 +41,96 @@ def _trajectory_from_replay_plan(mapper: GazeboPiMapper, replay_plan: Dict[str, 
     return trajectory
 
 
+def _trajectory_from_drawing_waypoints(
+    waypoints: Iterable[Iterable[float]],
+    n_steps_per_segment: int = 20,
+) -> List[np.ndarray]:
+    """Rebuild the nominal drawing path once from stored joint waypoints."""
+    points = [np.asarray(wp, dtype=np.float64) for wp in waypoints]
+    if len(points) < 2:
+        return points
+
+    trajectory: List[np.ndarray] = []
+    n_steps = max(2, int(n_steps_per_segment))
+    for start, goal in zip(points[:-1], points[1:]):
+        for t in np.linspace(0.0, 1.0, n_steps):
+            trajectory.append((start + t * (goal - start)).copy())
+    return trajectory
+
+
+def _keyframes_from_gazebo_waypoints(
+    mapper: GazeboPiMapper,
+    waypoints: Iterable[Iterable[float]],
+    min_delta_deg: float = 0.01,
+) -> List[Dict[str, Any]]:
+    """Convert stored Gazebo joint waypoints to inspectable Pi-degree keyframes."""
+    keyframes: List[Dict[str, Any]] = []
+    previous_positions: Optional[List[float]] = None
+
+    for idx, waypoint in enumerate(waypoints):
+        positions_rad = np.asarray(waypoint, dtype=np.float64)
+        positions_deg_dict = mapper.gazebo_positions_to_pi_deg(positions_rad)
+        positions_deg = [float(positions_deg_dict[name]) for name in mapper.pi_joint_names]
+
+        if previous_positions is not None:
+            max_delta = max(
+                abs(current - previous)
+                for current, previous in zip(positions_deg, previous_positions)
+            )
+            if max_delta < min_delta_deg:
+                continue
+
+        keyframes.append({
+            "idx": len(keyframes),
+            "source_waypoint_idx": int(idx),
+            "joint_names": list(mapper.pi_joint_names),
+            "positions_deg": positions_deg,
+        })
+        previous_positions = positions_deg
+
+    return keyframes
+
+
 def load_artifact_trajectory(artifact_path: str, mapper: Optional[GazeboPiMapper] = None) -> tuple[Dict[str, Any], List[np.ndarray], float]:
     """Load the best available replay trajectory from a PID artifact."""
     mapper = mapper or GazeboPiMapper()
     with open(artifact_path, "rb") as f:
         artifact = pickle.load(f)
 
-    trajectory_list = artifact.get("replay_trajectory_rad", [])
-    if not trajectory_list:
-        trajectory_list = artifact.get("commanded_trajectory_rad", [])
+    mode = str(artifact.get("mode", "")).strip().lower()
+    commanded_list = artifact.get("commanded_trajectory_rad", [])
+    replay_list = artifact.get("replay_trajectory_rad", [])
+    target_meta = artifact.get("target_metadata", {}) or {}
+    shape_waypoints = target_meta.get("shape_joint_waypoints", [])
+    artifact["_pi_export_keyframes"] = []
 
-    if trajectory_list:
-        trajectory = [np.asarray(cmd, dtype=np.float64) for cmd in trajectory_list]
+    export_source = os.environ.get("PI_EXPORT_TRAJECTORY_SOURCE", "").strip().lower()
+    trajectory_list = []
+
+    if mode == "drawing" and shape_waypoints and export_source not in {"commanded", "replay"}:
+        n_steps = int(os.environ.get("PI_EXPORT_DRAWING_SEGMENT_STEPS", "20"))
+        trajectory = _trajectory_from_drawing_waypoints(shape_waypoints, n_steps_per_segment=n_steps)
+        artifact["_pi_export_keyframes"] = _keyframes_from_gazebo_waypoints(mapper, shape_waypoints)
+        artifact["_pi_export_trajectory_source"] = "target_metadata.shape_joint_waypoints"
     else:
-        trajectory = _trajectory_from_replay_plan(mapper, artifact.get("replay_plan", {}))
+        if export_source == "commanded":
+            trajectory_list = commanded_list
+            artifact["_pi_export_trajectory_source"] = "commanded_trajectory_rad"
+        elif export_source == "replay":
+            trajectory_list = replay_list
+            artifact["_pi_export_trajectory_source"] = "replay_trajectory_rad"
+        else:
+            trajectory_list = replay_list or commanded_list
+            artifact["_pi_export_trajectory_source"] = (
+                "replay_trajectory_rad" if replay_list else "commanded_trajectory_rad"
+            )
+
+        if trajectory_list:
+            trajectory = [np.asarray(cmd, dtype=np.float64) for cmd in trajectory_list]
+        else:
+            trajectory = _trajectory_from_replay_plan(mapper, artifact.get("replay_plan", {}))
+            artifact["_pi_export_trajectory_source"] = "replay_plan"
+
 
     if not trajectory:
         raise ValueError(f"Artifact has no replay_trajectory_rad, commanded_trajectory_rad, or replay_plan segments: {artifact_path}")
@@ -106,7 +182,10 @@ def build_replay_plan_json(
         "source_dt_sec": float(sample_dt),
         "replay_rate_hz": float(replay_rate_hz),
         "joint_error_tolerance_deg": float(joint_error_tolerance_deg),
+        "trajectory_source": artifact.get("_pi_export_trajectory_source", "unknown"),
         "joint_names": list(mapper.pi_joint_names),
+        "keyframe_count": len(artifact.get("_pi_export_keyframes", [])),
+        "keyframes_deg": artifact.get("_pi_export_keyframes", []),
         "segment_count": len(segments),
         "duration_sec": round(t_from_start, 6),
         "downsample_stride": int(plan.get("downsample_stride", 1)),
@@ -154,4 +233,3 @@ def validate_replay_plan(plan: Dict[str, Any]) -> None:
             value = float(pos)
             if value < 0.0 or value > 180.0:
                 raise ValueError(f"Segment {idx} joint {name} is outside [0, 180] deg: {value}")
-

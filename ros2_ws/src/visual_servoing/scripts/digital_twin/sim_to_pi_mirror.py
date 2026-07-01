@@ -1,55 +1,49 @@
 #!/usr/bin/env python3
 """
-⚠️ DEPRECATED: Please use sim_to_pi_mirror.py instead!
-
-Digital Twin: Gazebo to Real Mirror (Sim-to-Real)
-==================================================
+Digital Twin: Gazebo to Pi Realtime Mirror
+==========================================
 Subscribes to Gazebo's /joint_states (RADIANS)
 and publishes JointState commands to Pi's /pca9685_servo/command (DEGREES).
 
-4-DOF mode: base, shoulder, elbow, pen are forwarded.
-RATE LIMITED to 10Hz to avoid overwhelming the Pi's servo controller.
-
-Pi joint limits (degrees):
-  j1 (base):     0° (left)  → 90° (home) → 180° (right)
-  j2 (shoulder): 0° (down)  → 180° (up)
-  j3 (elbow):    180° (down) → 0° (up)   [INVERTED]
-  j4 (pen):      0° (down)  → 180° (up)
+Uses mapping for 6-DOF robot arm:
+  Revolute 20 -> base
+  Revolute 22 -> shoulder
+  Revolute 23 -> elbow
+  Revolute 26 -> wrist_roll
+  Revolute 28 -> wrist_pitch
+  Revolute 30 -> pen
 """
 
+import argparse
 import math
+import sys
 import time
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 
-
-# Gazebo joint → (Pi name, pi_home_deg, inverted)
+# Gazebo joint -> (Pi name, pi_home_deg, inverted)
 REVERSE_MAPPING = {
     "Revolute 20": ("base",         90.0,  False),
-    "Revolute 22": ("shoulder",     90.0, False),  # 0 upfront, 90 down, 180 under
-    "Revolute 23": ("elbow",        90.0,  False),  # 90 is home neutral
-    "Revolute 26": ("wrist_roll",   90.0,  False),  # J4: Gazebo=0 -> Pi=90 neutral
-    "Revolute 28": ("wrist_pitch",  90.0,  False),  # J5: Gazebo=0 -> Pi=90
-    "Revolute 30": ("pen",          90.0,  False),  # J6: Gazebo=0 -> Pi=90
+    "Revolute 22": ("shoulder",     90.0,  False),
+    "Revolute 23": ("elbow",        90.0,  False),
+    "Revolute 26": ("wrist_roll",   90.0,  False),
+    "Revolute 28": ("wrist_pitch",  90.0,  False),
+    "Revolute 30": ("pen",          90.0,  False),
 }
-
-# Only send commands at this rate (Hz) — Pi can't handle 50Hz
-PUBLISH_RATE_HZ = 10.0
-MIN_CHANGE_DEG = 0.5  # Don't send if change is less than this
-
 
 def rad_to_deg(rad):
     return rad * 180.0 / math.pi
 
-
 def clamp(val, lo, hi):
     return max(lo, min(hi, val))
 
+class SimToPiMirror(Node):
+    def __init__(self, rate_hz=10.0, deadband_deg=0.5):
+        super().__init__('sim_to_pi_mirror')
 
-class GazeboToRealMirror(Node):
-    def __init__(self):
-        super().__init__('gazebo_to_real_mirror')
+        self.rate_hz = rate_hz
+        self.deadband_deg = deadband_deg
 
         self.command_pub = self.create_publisher(
             JointState,
@@ -65,13 +59,13 @@ class GazeboToRealMirror(Node):
         )
 
         self.last_send_time = 0.0
-        self.min_interval = 1.0 / PUBLISH_RATE_HZ
-        self.last_sent_positions = {}  # Track last sent positions
+        self.min_interval = 1.0 / self.rate_hz
+        self.last_sent_positions = {}  # Track last sent positions (in degrees)
         self.msg_count = 0
 
-        self.get_logger().info("🔄 Sim-to-Real mirror started (4-DOF)")
-        self.get_logger().info(f"   Rate limited to {PUBLISH_RATE_HZ}Hz")
-        self.get_logger().info("   Gazebo (radians) → Pi (degrees)")
+        self.get_logger().info("🔄 Sim-to-Real Mirror (Gazebo -> Pi) started")
+        self.get_logger().info(f"   Rate limited: {self.rate_hz} Hz")
+        self.get_logger().info(f"   Dead-band: {self.deadband_deg}°")
 
     def gazebo_rad_to_pi_deg(self, gazebo_rad, home_deg, inverted):
         """Convert Gazebo radians to Pi servo degrees."""
@@ -82,26 +76,29 @@ class GazeboToRealMirror(Node):
         return clamp(pi_deg, 0.0, 180.0)
 
     def joint_states_callback(self, msg: JointState):
-        # Rate limiting
         now = time.monotonic()
         if (now - self.last_send_time) < self.min_interval:
             return
 
         cmd = JointState()
         cmd.header.stamp = self.get_clock().now().to_msg()
-
         has_significant_change = False
+
+        # Build degree mappings for logging
+        log_pairs = []
 
         for gz_name, position in zip(msg.name, msg.position):
             if gz_name in REVERSE_MAPPING:
                 pi_name, home, inv = REVERSE_MAPPING[gz_name]
                 pi_deg = self.gazebo_rad_to_pi_deg(position, home, inv)
-                cmd.name.append(pi_name)
-                cmd.position.append(pi_deg)
 
-                # Check if position changed enough to warrant sending
                 last = self.last_sent_positions.get(pi_name, None)
-                if last is None or abs(pi_deg - last) > MIN_CHANGE_DEG:
+                delta = abs(pi_deg - last) if last is not None else 999.0
+                log_pairs.append((pi_name, rad_to_deg(position), pi_deg, delta))
+
+                if last is None or delta > self.deadband_deg:
+                    cmd.name.append(pi_name)
+                    cmd.position.append(pi_deg)
                     has_significant_change = True
 
         if not cmd.name or not has_significant_change:
@@ -116,13 +113,21 @@ class GazeboToRealMirror(Node):
 
         self.msg_count += 1
         if self.msg_count <= 5 or self.msg_count % 50 == 0:
-            pos_str = ', '.join(f'{n}={p:.1f}°' for n, p in zip(cmd.name, cmd.position))
-            self.get_logger().info(f"🔄 #{self.msg_count}: {pos_str}")
-
+            log_str = " | ".join([f"{name}: sim={sim_deg:.1f}°, cmd={cmd_deg:.1f}°, delta={delta:.1f}°" 
+                                  for name, sim_deg, cmd_deg, delta in log_pairs])
+            self.get_logger().info(f"🔄 Mirror Frame #{self.msg_count}:\n   {log_str}")
 
 def main(args=None):
+    # Parse CLI arguments if run directly (ROS arguments stripped by rclpy.init later)
+    parser = argparse.ArgumentParser(description="Sim-to-Real Mirror Node")
+    parser.add_argument("--rate-hz", type=float, default=10.0, help="Publish rate in Hz")
+    parser.add_argument("--deadband-deg", type=float, default=0.5, help="Minimum joint angle change to trigger publish")
+    
+    # Strip ROS-specific arguments from sys.argv before parsing
+    parsed_args, unknown = parser.parse_known_args()
+    
     rclpy.init(args=args)
-    node = GazeboToRealMirror()
+    node = SimToPiMirror(rate_hz=parsed_args.rate_hz, deadband_deg=parsed_args.deadband_deg)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
@@ -131,7 +136,6 @@ def main(args=None):
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
-
 
 if __name__ == '__main__':
     main()
