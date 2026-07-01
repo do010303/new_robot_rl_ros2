@@ -2,6 +2,78 @@
 
 Deep Reinforcement Learning for precise reaching/drawing on a 6-DOF robotic arm, using visual servoing with ArUco marker detection in Gazebo.
 
+---
+
+# 🚀 8. Option 8 - Digital Twin Realtime Mirror
+
+Chạy training + mirroring cùng lúc trong 1 terminal. Mirror chạy background bắt `/joint_states` từ Gazebo, training chạy foreground di chuyển robot trong sim. Khi robot sim cử động, robot thật trên Pi bám theo realtime.
+
+```text
+┌──────────┐   /joint_states   ┌──────────────────┐  /pca9685_servo/command  ┌─────┐
+│  Gazebo  │ ───────────────→  │ sim_to_pi_mirror │ ───────────────────────→ │ Pi  │
+│  + Train │   (radian, 50Hz)  │  (background)    │   (degree, 10Hz)        │     │
+└──────────┘                   │  deadband 0.5°   │                         └─────┘
+                               └──────────────────┘
+```
+
+### Environment Variables (BẮT BUỘC trên cả 2 máy)
+
+```bash
+export ROS_DOMAIN_ID=0
+export ROS_LOCALHOST_ONLY=0
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+export FASTRTPS_DEFAULT_PROFILES_FILE=~/new_rl_ros2/ros2_ws/src/visual_servoing/config/fastdds_twin.xml
+```
+
+### Bước 1: Pi — Khởi chạy node servo
+
+```bash
+ssh piros2@192.168.50.1
+cd ~/ros2_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+export ROS_DOMAIN_ID=0
+export ROS_LOCALHOST_ONLY=0
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+ros2 launch wicom_roboarm wicom_roboarm.launch.py
+```
+
+### Bước 2: Laptop Terminal 1 — Khởi chạy Gazebo
+
+```bash
+cd ~/new_rl_ros2/ros2_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+export ROS_DOMAIN_ID=0
+export ROS_LOCALHOST_ONLY=0
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+export FASTRTPS_DEFAULT_PROFILES_FILE=~/new_rl_ros2/ros2_ws/src/visual_servoing/config/fastdds_twin.xml
+ros2 launch visual_servoing visual_servoing_test.launch.py
+```
+
+### Bước 3: Laptop Terminal 2 — Chạy Option 8 (mirror + training)
+
+```bash
+cd ~/new_rl_ros2/ros2_ws/src/visual_servoing/scripts
+source /opt/ros/humble/setup.bash
+source ~/new_rl_ros2/ros2_ws/install/setup.bash
+export ROS_DOMAIN_ID=0
+export ROS_LOCALHOST_ONLY=0
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+export FASTRTPS_DEFAULT_PROFILES_FILE=~/new_rl_ros2/ros2_ws/src/visual_servoing/config/fastdds_twin.xml
+python3 train_visual_servoing.py
+```
+
+Chọn **8** từ menu. Script sẽ hỏi:
+
+```text
+Mirror publish rate Hz (default 10):     ← Enter để dùng 10Hz
+Mirror deadband degrees (default 0.5):   ← Enter để dùng 0.5°
+```
+
+---
+
+
 ## Repo layout
 
 - `ros2_ws/` — Gazebo + `visual_servoing` stack (laptop)
