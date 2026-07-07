@@ -765,7 +765,7 @@ class PiDirectBackend(RealReplayBackend):
           not TF2, since there is no robot_state_publisher running.
     """
     supports_reward_feedback = True
-    supports_high_rate_streaming = False
+    supports_high_rate_streaming = True
     uses_gazebo_model_states = False
 
     def __init__(self, node):
@@ -774,6 +774,19 @@ class PiDirectBackend(RealReplayBackend):
             "🤖 Pi-direct backend ready: training directly on hardware, "
             "reward computed via FK (no Gazebo needed)"
         )
+
+    def stream_joint_positions(self, target_positions: np.ndarray, duration: float = 0.01) -> bool:
+        target_positions = np.clip(
+            np.asarray(target_positions, dtype=np.float64),
+            self.node.gazebo_limits_low,
+            self.node.gazebo_limits_high,
+        )
+        traj = self.mapper.build_pi_trajectory_from_gazebo(target_positions, duration)
+        traj.header.stamp = self.node.get_clock().now().to_msg()
+        if not traj.joint_names or not traj.points:
+            return False
+        self.real_joint_trajectory_pub.publish(traj)
+        return True
 
 
 def create_motion_backend(node, backend_name: Optional[str] = None, mirror_safe_moves: bool = True):
