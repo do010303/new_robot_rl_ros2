@@ -22,6 +22,7 @@ SUPPORTED_CONTROL_BACKENDS = {
     'sim',
     'sim_to_real_shadow',
     'real_replay',
+    'pi_direct',
 }
 
 GAZEBO_JOINT_NAMES = [
@@ -751,6 +752,30 @@ class RealReplayBackend(MotionBackendBase):
         return True
 
 
+class PiDirectBackend(RealReplayBackend):
+    """Pi-direct training backend: send commands to Pi, get feedback via FK.
+
+    Identical to RealReplayBackend for communication, but enables
+    reward_feedback so the RL training loop can compute rewards from
+    FK-derived end-effector positions.  No Gazebo required.
+
+    Usage:
+        - Pi must be running wicom_roboarm on the same ROS 2 DDS domain.
+        - End-effector position is computed by FK (exact URDF math),
+          not TF2, since there is no robot_state_publisher running.
+    """
+    supports_reward_feedback = True
+    supports_high_rate_streaming = False
+    uses_gazebo_model_states = False
+
+    def __init__(self, node):
+        super().__init__(node)
+        node.get_logger().info(
+            "🤖 Pi-direct backend ready: training directly on hardware, "
+            "reward computed via FK (no Gazebo needed)"
+        )
+
+
 def create_motion_backend(node, backend_name: Optional[str] = None, mirror_safe_moves: bool = True):
     resolved = resolve_control_backend(backend_name)
     if resolved == 'sim':
@@ -759,4 +784,6 @@ def create_motion_backend(node, backend_name: Optional[str] = None, mirror_safe_
         return SimToRealShadowBackend(node, mirror_safe_moves=mirror_safe_moves)
     if resolved == 'real_replay':
         return RealReplayBackend(node)
+    if resolved == 'pi_direct':
+        return PiDirectBackend(node)
     raise ValueError(f"Unsupported control backend '{resolved}'")

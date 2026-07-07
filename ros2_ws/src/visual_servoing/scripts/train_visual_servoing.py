@@ -1456,10 +1456,11 @@ def show_menu():
     print("5. 🖋️ Drawing Task Training (SAC 6D Direct)")
     print("6. 🖋️ Drawing Task Training (SAC + Neural IK)")
     print("7. 🎛️ PID Tuning (RL-Optimized PID Gains)")
-    print("8. 🚀 Deploy to Pi (Replay saved training on real robot)")
+    print("8. 🚀 Digital Twin Realtime Mirror (Gazebo -> Pi realtime)")
+    print("9. 🤖 Pi-Only Training (no Gazebo, direct Pi control)")
     print("="*70)
 
-    choice = input("Select option (1-8): ").strip()
+    choice = input("Select option (1-9): ").strip()
     return choice
 
 
@@ -3991,19 +3992,119 @@ def main():
             segment_steps=segment_steps,
         )
     elif choice == '8':
-        # Standalone Deploy to Pi
-        print("\n🚀 Standalone Deploy to Pi:")
-        print("  a. 📍 Reaching (Random joint targets)")
-        print("  b. 🖋️  Drawing (Shape waypoints)")
-        sub = input("Select (a/b, default=a): ").strip().lower()
+        # 🚀 Digital Twin Realtime Mirror
+        print("\n🚀 Digital Twin Realtime Mirror:")
+        rate_input = input("Mirror publish rate Hz (default 10): ").strip()
+        try:
+            rate_hz = float(rate_input) if rate_input else 10.0
+        except ValueError:
+            rate_hz = 10.0
+
+        deadband_input = input("Mirror deadband degrees (default 0.5): ").strip()
+        try:
+            deadband = float(deadband_input) if deadband_input else 0.5
+        except ValueError:
+            deadband = 0.5
+
+        print("\nSelect training mode to run WITH mirror:")
+        print("  a. 📍 PID Reaching")
+        print("  b. 🖋️  PID Drawing      ← khuyến nghị test đầu tiên")
+        print("  c. 🎮 Manual Control")
+        sub = input("Select (a/b/c, default=b): ").strip().lower()
+        if not sub:
+            sub = 'b'
+
         mode = 'drawing' if sub == 'b' else 'reaching'
 
-        replay_artifact_path, replay_gains_path = prompt_pid_replay_paths(mode)
-        _run_pid_real_replay(
-            mode=mode,
-            replay_artifact_path=replay_artifact_path,
-            replay_gains_path=replay_gains_path,
-        )
+        # Initialize defaults for train_pid_tuning parameters
+        require_board_detection = False
+        segment_steps = 20
+
+        if sub in ('a', 'b'):
+            require_board_detection = input(
+                "Require live board detection? (y/N): "
+            ).strip().lower() == 'y'
+
+            if sub == 'b':
+                steps_input = input("Drawing segment steps (default 20, lower = faster): ").strip()
+                if steps_input:
+                    try:
+                        segment_steps = int(steps_input)
+                    except ValueError:
+                        pass
+
+        # Resolve path to sim_to_pi_mirror.py
+        import subprocess
+        scripts_dir = os.path.dirname(os.path.abspath(__file__))
+        mirror_script = os.path.join(scripts_dir, "digital_twin", "sim_to_pi_mirror.py")
+
+        print(f"\n🔄 Starting sim-to-real mirror in background ({rate_hz} Hz, deadband {deadband}°)...")
+        mirror_proc = None
+        try:
+            mirror_proc = subprocess.Popen(
+                [sys.executable, mirror_script, "--rate-hz", str(rate_hz), "--deadband-deg", str(deadband)]
+            )
+            time.sleep(1.0) # Let it print starting logs
+
+            if sub == 'c':
+                manual_control_mode(control_backend='sim')
+            else:
+                train_pid_tuning(
+                    mode=mode,
+                    control_backend='sim',
+                    require_board_detection=require_board_detection,
+                    replay_artifact_path=None,
+                    replay_gains_path=None,
+                    segment_steps=segment_steps,
+                )
+        finally:
+            if mirror_proc is not None:
+                print("\n🛑 Stopping sim-to-real mirror...")
+                mirror_proc.terminate()
+                try:
+                    mirror_proc.wait(timeout=5.0)
+                except subprocess.TimeoutExpired:
+                    mirror_proc.kill()
+                    mirror_proc.wait()
+                print("✅ Mirror stopped.")
+    elif choice == '9':
+        # 🤖 Pi-Only Training (no Gazebo)
+        print("\n🤖 Pi-Only Training (no Gazebo):")
+        print("   Laptop giao tiếp trực tiếp với Pi qua ROS 2 DDS.")
+        print("   Pi phải đang chạy wicom_roboarm node trên cùng mạng.")
+        print("   End-effector position được tính bằng FK (không cần TF2/Gazebo).")
+        print()
+        print("  a. 📍 PID Reaching (Random joint targets)")
+        print("  b. 🖋️  PID Drawing (Shape waypoints) ← khuyến nghị")
+        print("  c. 🎮 Manual Control")
+        sub = input("Select (a/b/c, default=b): ").strip().lower()
+        if not sub:
+            sub = 'b'
+
+        mode = 'drawing' if sub == 'b' else 'reaching'
+        segment_steps = 20
+
+        if sub in ('a', 'b'):
+            if sub == 'b':
+                steps_input = input("Drawing segment steps (default 20, lower = faster): ").strip()
+                if steps_input:
+                    try:
+                        segment_steps = int(steps_input)
+                    except ValueError:
+                        pass
+
+            train_pid_tuning(
+                mode=mode,
+                control_backend='pi_direct',
+                require_board_detection=False,
+                replay_artifact_path=None,
+                replay_gains_path=None,
+                segment_steps=segment_steps,
+            )
+        elif sub == 'c':
+            manual_control_mode(control_backend='pi_direct')
+        else:
+            print("❌ Invalid sub-option")
     else:
         print("❌ Invalid choice! Exiting...")
 

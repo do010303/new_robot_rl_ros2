@@ -3,7 +3,10 @@ ros2_ws/build/
 ros2_ws/install/
 ros2_ws/log/
 
-# === External Gazebo Harmonic dependencies (built from source) ===
+# === External Gazebo / ros2_control dependencies (cloned via vcstool) ===
+# These are third-party repos fetched at setup time with:
+#   cd ros2_ws/src && vcs import --input deps.repos .
+# They must NOT be committed to this repository.
 ros2_ws/src/ros_gz/
 ros2_ws/src/gz_ros2_control/
 
@@ -38,7 +41,16 @@ Thumbs.db
 # === Training outputs (all packages) ===
 # Step logs, replay buffers, training plots, CSVs, PKLs
 **/training_results/
-**/checkpoints/
+
+# === Model checkpoints ===
+# Ignore all checkpoints by default
+**/checkpoints/**
+# But keep best pretrained models for fresh-machine setup
+!**/checkpoints/
+!**/checkpoints/neural_ik.pth
+!**/checkpoints/sac_pid_tuning_drawing_sim/
+!**/checkpoints/sac_pid_tuning_drawing_sim/*_best.*
+!**/checkpoints/sac_pid_tuning_drawing_sim/best_gains_*
 
 # === Large data / metrics logs ===
 *.jsonl
@@ -65,5 +77,4 @@ backups/
 ref/
 *performance_test*
 /ROS2 - How to run(2)(1).md
-
 

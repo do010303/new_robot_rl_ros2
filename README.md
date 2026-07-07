@@ -4,6 +4,135 @@ Deep Reinforcement Learning for precise reaching/drawing on a 6-DOF robotic arm,
 
 ---
 
+## 📦 Setup from Scratch (Fresh Machine)
+
+### Prerequisites
+
+| Component | Version |
+|-----------|---------|
+| OS | Ubuntu 22.04 LTS |
+| ROS 2 | Humble Hawksbill |
+| Gazebo | Harmonic (gz-sim8) |
+| Python | 3.10+ |
+
+> **Note**: Install ROS 2 Humble first: [docs.ros.org/en/humble/Installation](https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html)
+
+### Automatic Setup (Recommended)
+
+```bash
+git clone git@github.com:do010303/new_robot_rl_ros2.git ~/new_rl_ros2
+cd ~/new_rl_ros2
+chmod +x setup_workspace.sh
+./setup_workspace.sh
+```
+
+The script will:
+1. Install all ROS 2 / Gazebo apt packages (`ros-humble-ros-gzharmonic`, `ros2-control`, `cv-bridge`, etc.)
+2. Clone external source dependencies via vcstool (`gz_ros2_control`)
+3. Create a Python venv with all pip dependencies (torch, onnx, opencv, etc.)
+4. Build the workspace with `colcon build`
+5. Verify everything works
+
+### Manual Setup (Step-by-step)
+
+<details>
+<summary>Click to expand manual steps</summary>
+
+```bash
+# 1. Install ROS 2 system packages
+sudo apt-get update
+sudo apt-get install -y \
+    ros-humble-ros-gzharmonic \
+    ros-humble-ros2-control \
+    ros-humble-ros2-controllers \
+    ros-humble-controller-manager \
+    ros-humble-robot-state-publisher \
+    ros-humble-joint-state-publisher \
+    ros-humble-joint-state-publisher-gui \
+    ros-humble-xacro \
+    ros-humble-cv-bridge \
+    ros-humble-rviz2 \
+    python3-vcstool \
+    python3-venv
+
+# 2. Clone the repo
+git clone git@github.com:do010303/new_robot_rl_ros2.git ~/new_rl_ros2
+cd ~/new_rl_ros2
+
+# 3. Clone external source dependencies
+cd ros2_ws/src
+vcs import --input deps.repos .
+cd ../..
+
+# 4. Python virtual environment
+python3 -m venv --system-site-packages .venv
+source .venv/bin/activate
+pip install -U pip
+pip install -r ros2_ws/src/visual_servoing/requirements.txt
+
+# 5. Build
+source /opt/ros/humble/setup.bash
+cd ros2_ws
+colcon build --symlink-install
+source install/setup.bash
+```
+</details>
+
+---
+
+# 🤖 9. Option 9 - Pi-Only Training (No Gazebo)
+
+Train trực tiếp trên robot Pi, **không cần Gazebo**. Thích hợp cho máy mới hoặc máy không cài Gazebo.
+
+```text
+┌──────────┐  /pca9685_servo/joint_states  ┌──────────────┐
+│    Pi     │ ────────────────────────────→ │   Laptop     │
+│  (servo)  │                               │  train.py    │
+│           │ ←──────────────────────────── │  option 9    │
+└──────────┘  /pca9685_servo/trajectory     │  FK reward   │
+                                            └──────────────┘
+```
+
+### Pre-trained models included
+
+Repo đã bao gồm best models (~4MB), máy mới clone về là có sẵn:
+- `checkpoints/neural_ik.pth` — Neural IK model
+- `checkpoints/sac_pid_tuning_drawing_sim/*_best.*` — SAC best checkpoints (actor, critic, alpha)
+
+### Cách chạy
+
+**Bước 1: Pi — Khởi chạy servo node**
+
+```bash
+ssh piros2@192.168.50.1
+cd ~/ros2_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+export ROS_DOMAIN_ID=0
+export ROS_LOCALHOST_ONLY=0
+ros2 launch wicom_roboarm wicom_roboarm.launch.py
+```
+
+**Bước 2: Laptop — Chạy Option 9**
+
+```bash
+cd ~/new_rl_ros2
+source .venv/bin/activate
+source /opt/ros/humble/setup.bash
+source ros2_ws/install/setup.bash
+export ROS_DOMAIN_ID=0
+export ROS_LOCALHOST_ONLY=0
+cd ros2_ws/src/visual_servoing/scripts
+python3 train_visual_servoing.py
+```
+
+Chọn **9**, sau đó chọn sub-option:
+- `a` — PID Reaching (random targets)
+- `b` — PID Drawing (shape waypoints) ← khuyến nghị
+- `c` — Manual Control
+
+---
+
 # 🚀 8. Option 8 - Digital Twin Realtime Mirror
 
 Chạy training + mirroring cùng lúc trong 1 terminal. Mirror chạy background bắt `/joint_states` từ Gazebo, training chạy foreground di chuyển robot trong sim. Khi robot sim cử động, robot thật trên Pi bám theo realtime.

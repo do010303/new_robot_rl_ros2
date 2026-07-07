@@ -7,12 +7,25 @@
 # The NumPy/SciPy pins avoid the currently broken combination where SciPy comes
 # from the Ubuntu/ROS stack but NumPy has been upgraded past SciPy's supported
 # range, which causes warnings and unstable optimizer behavior in PID/IK code.
-# `torch` is intentionally not pinned here. This repo already sees the system
-# torch through `--system-site-packages`, and pulling a fresh wheel often drags
-# in unnecessary multi-GB CUDA dependencies on laptops that train on CPU.
+
+# --- Core scientific stack ---
 numpy>=1.24,<1.25
 scipy>=1.10,<1.11
 matplotlib>=3.6,<3.8
+
+# --- RL / ML ---
 gymnasium>=0.29,<1.1
+# CPU-only PyTorch to keep install small (~200 MB).
+# For CUDA support, install manually: pip install torch --index-url https://download.pytorch.org/whl/cu121
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch>=2.0,<3
+
+# --- ONNX model export & inference (Pi deployment) ---
+onnx>=1.14,<2
+onnxruntime>=1.15,<2
+
+# --- Vision ---
 opencv-contrib-python>=4.8,<4.11
+
+# --- Utilities ---
 PyYAML>=6.0,<7
